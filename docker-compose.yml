@@ -1,0 +1,30 @@
+# SmarTel — one-command deployment
+#
+#   cp .env.example .env      # fill in BOT_TOKEN (+ AI_API_KEY or use /ai later)
+#   docker compose up -d --build
+#   docker compose logs -f    # the owner claim code is printed here
+#
+# The bot needs to run continuously: `restart: unless-stopped` brings it back
+# after a crash or a host reboot.
+services:
+  smartel:
+    build: .
+    image: smartel:latest
+    container_name: smartel
+    restart: unless-stopped
+    # All secrets stay in .env on the host (never baked into the image).
+    env_file:
+      - .env
+    environment:
+      # Keep the database and uploads on the mounted volume.
+      DB_PATH: /app/storage/smartel.db
+      UPLOADS_DIR: /app/storage/uploads
+      VECTOR_STORE_DIR: /app/storage/vector_store
+    volumes:
+      - ./storage:/app/storage
+    # Logs go to stdout; `docker compose logs -f` shows the claim code and activity.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
