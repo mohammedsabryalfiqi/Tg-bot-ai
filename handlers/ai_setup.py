@@ -120,6 +120,12 @@ def _provider_detail_text(provider: providers.Provider) -> str:
         base = ai_service.active_base_url(provider.id) or "(not set)"
         lines.append(f"Base URL: <code>{utils.escape(base)}</code>")
         lines.append("Send the base URL, the model name and (optionally) an API key.")
+    elif provider.base_url:
+        base = ai_service.active_base_url(provider.id) or "(not set)"
+        lines.append("")
+        lines.append(f"Endpoint: <code>{utils.escape(base)}</code>")
+        if provider.local:
+            lines.append("<i>Must be reachable from the machine running the bot.</i>")
     lines.append("")
     lines.append(f"Model: <code>{utils.escape(ai_service.active_model(provider.id))}</code>")
     return "\n".join(lines)

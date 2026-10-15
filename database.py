@@ -53,8 +53,8 @@ SETTINGS_SCHEMA: dict[str, tuple[type, object]] = {
 
     # --- AI provider layer (see services/ai_service.py) -----------------------
     # Which provider generates replies: openai | anthropic | google | groq |
-    # openrouter | deepseek | mistral | xai | together | ollama | lmstudio |
-    # custom | codex. Keys live (encrypted) in the api_keys table.
+    # openrouter | deepseek | mistral | xai | together | omniroute | ollama |
+    # lmstudio | custom | codex. Keys live (encrypted) in the api_keys table.
     "ai_provider": (str, "openai"),
     "ai_base_url": (str, ""),                # only for custom/local endpoints
     "ai_model_by_provider": (str, "{}"),     # JSON: {provider_id: model_name}

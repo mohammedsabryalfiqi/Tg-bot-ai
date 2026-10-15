@@ -346,7 +346,7 @@ def _choose_provider() -> tuple[str, str, str, str, str, str]:
         suffix = f"  ({', '.join(flags)})" if flags else ""
         print(f"     {index:2d}) {provider.label}{suffix}")
     print("      0) Configure later from Telegram with /ai  (recommended)")
-    raw = input("   Select [0-13] (default 0): ").strip() or "0"
+    raw = input(f"   Select [0-{len(ordered)}] (default 0): ").strip() or "0"
 
     if raw == "0":
         return ("openai", "", "", "", "", "")
@@ -371,6 +371,11 @@ def _choose_provider() -> tuple[str, str, str, str, str, str]:
     if provider.id == "custom":
         base_url = _prompt_text("   Base URL (e.g. http://localhost:1234/v1)")
         model = _prompt_text("   Model name")
+    # Self-hosted endpoints (OmniRoute, Ollama, LM Studio) come with a working
+    # default; tell the owner how to move them instead of prompting for it.
+    for env_name in _providers.base_url_env_names(provider.id):
+        print(f"   Endpoint: {provider.base_url}  "
+              f"(override with {env_name} in .env if it runs elsewhere)")
     if provider.key_required:
         hint = f" (get one at {provider.key_url})" if provider.key_url else ""
         print(f"   {provider.label}: API key{hint}")
