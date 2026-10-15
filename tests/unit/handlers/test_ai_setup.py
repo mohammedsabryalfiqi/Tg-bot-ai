@@ -133,7 +133,8 @@ def test_key_prompt_explains_that_the_message_is_deleted(env, make_call):
 
 
 def test_valid_key_is_stored_and_the_message_deleted(env, mocker):
-    mocker.patch("services.ai_service.validate_key", return_value=(True, "Model replied: pong"))
+    mocker.patch("services.ai_service.check_key",
+                 return_value=ai_service.KeyCheck(True, "Model replied: pong"))
     ai_setup.apply_pending(_msg(text="sk-test-key-123", message_id=77), "ai_key",
                            {"provider": "openai"})
     handlers.bot.delete_message.assert_called_once_with(OWNER_CHAT, 77)
@@ -143,7 +144,8 @@ def test_valid_key_is_stored_and_the_message_deleted(env, mocker):
 
 
 def test_rejected_key_is_reported_and_not_stored(env, mocker):
-    mocker.patch("services.ai_service.validate_key", return_value=(False, "Invalid API key"))
+    mocker.patch("services.ai_service.check_key",
+                 return_value=ai_service.KeyCheck(False, "Invalid API key", kind="auth"))
     ai_setup.apply_pending(_msg(text="sk-bad"), "ai_key", {"provider": "openai"})
     assert ai_service.has_api_key("openai") is False
     assert any("Invalid API key" in text for text in _sent())
@@ -196,14 +198,16 @@ def test_close_deletes_the_message(env, make_call):
 
 # --- connection test ---------------------------------------------------------
 def test_run_test_reports_success(env, mocker):
-    mocker.patch("services.ai_service.test_connection", return_value=(True, "Connected (1.2s)"))
+    mocker.patch("services.ai_service.check_connection",
+                 return_value=ai_service.KeyCheck(True, "Connected (1.2s)"))
     ai_setup.run_test(OWNER_CHAT)
     assert any("Connected" in text for text in _sent())
 
 
 def test_run_test_reports_failure(env, mocker):
-    mocker.patch("services.ai_service.test_connection",
-                 return_value=(False, "The provider rejected the key"))
+    mocker.patch("services.ai_service.check_connection",
+                 return_value=ai_service.KeyCheck(False, "The provider rejected the key",
+                                                  kind="auth"))
     ai_setup.run_test(OWNER_CHAT)
     assert any("rejected the key" in text for text in _sent())
 
@@ -240,3 +244,184 @@ def test_local_providers_need_no_key():
         provider = providers.get(provider_id)
         assert provider.key_required is False
         assert provider.base_url.startswith("http://")
+
+
+# --- free providers (/freeai) -------------------------------------------------
+def test_freeai_lists_every_free_provider_with_its_key_url(env):
+    ai_setup.open_free(OWNER_CHAT)
+    text = "\n".join(_sent())
+    for provider in providers.free():
+        assert provider.label in text
+        if provider.key_url:
+            assert provider.key_url in text
+    assert "Google Gemini" in text
+    assert "credit card" in text.lower()
+
+
+def test_freeai_does_not_list_paid_providers(env):
+    ai_setup.open_free(OWNER_CHAT)
+    text = "\n".join(_sent())
+    for provider_id in ("openai", "anthropic", "deepseek", "together"):
+        assert providers.get(provider_id).label not in text
+
+
+def test_freeai_offers_only_free_provider_buttons(env):
+    ai_setup.open_free(OWNER_CHAT)
+    markup = handlers.bot.send_message.call_args.kwargs["reply_markup"]
+    data = [b.callback_data for row in markup.keyboard for b in row]
+    assert any(entry == "ai:provider:groq" for entry in data)
+    assert not any(entry == "ai:provider:openai" for entry in data)
+
+
+def test_freeai_marks_the_active_provider(env):
+    ai_service.set_provider("groq")
+    ai_setup.open_free(OWNER_CHAT)
+    assert "active now" in "\n".join(_sent())
+
+
+def test_providers_free_callback_filters_the_list(env, make_call):
+    ai_setup.on_callback(make_call(data="ai:providers_free"))
+    markup = handlers.bot.edit_message_text.call_args.kwargs["reply_markup"]
+    data = [b.callback_data for row in markup.keyboard for b in row]
+    assert "ai:provider:google" in data
+    assert "ai:provider:openai" not in data
+    assert "ai:providers" in data          # the way back to the full list
+
+
+def test_root_screen_offers_the_free_shortcut(env, make_call):
+    ai_setup.on_callback(make_call(data="ai:root"))
+    markup = handlers.bot.edit_message_text.call_args.kwargs["reply_markup"]
+    data = [b.callback_data for row in markup.keyboard for b in row]
+    assert "ai:providers_free" in data
+
+
+def test_status_screen_points_at_freeai_when_no_key(env):
+    ai_setup.open_root(OWNER_CHAT)
+    assert "/freeai" in _sent()[0]
+
+
+# --- one-tap switch to a free provider ---------------------------------------
+def test_freeswitch_changes_provider_and_asks_for_the_key(env, make_call):
+    ai_setup.on_callback(make_call(data="ai:freeswitch:groq"))
+    assert database.get_str("ai_provider") == "groq"
+    assert ai_service.active_model("groq") == providers.get("groq").default_model
+    state = database.get_owner_pending_input(OWNER_CHAT)
+    assert state["kind"] == "ai_key"
+    assert state["context"]["provider"] == "groq"
+    assert "console.groq.com" in "\n".join(_sent())
+
+
+def test_freeswitch_to_a_keyless_provider_tests_it_right_away(env, make_call, mocker):
+    tested = mocker.patch("services.ai_service.check_connection",
+                          return_value=ai_service.KeyCheck(True, "Connection OK"))
+    ai_setup.on_callback(make_call(data="ai:freeswitch:pollinations"))
+    assert database.get_str("ai_provider") == "pollinations"
+    assert database.get_owner_pending_input(OWNER_CHAT) is None
+    tested.assert_called_once()
+
+
+def test_freeswitch_unknown_provider_is_ignored(env, make_call):
+    ai_setup.on_callback(make_call(data="ai:freeswitch:nope"))
+    assert database.get_str("ai_provider") in ("", "openai")
+
+
+def test_paid_provider_screen_points_at_the_free_ones(env, make_call):
+    ai_setup.on_callback(make_call(data="ai:provider:openai"))
+    markup = handlers.bot.edit_message_text.call_args.kwargs["reply_markup"]
+    data = [b.callback_data for row in markup.keyboard for b in row]
+    assert "ai:providers_free" in data
+    assert "paid credit" in handlers.bot.edit_message_text.call_args.args[0].lower() \
+        or "/freeai" in handlers.bot.edit_message_text.call_args.args[0]
+
+
+def test_free_provider_screen_does_not_nag_about_credit(env, make_call):
+    ai_setup.on_callback(make_call(data="ai:provider:groq"))
+    markup = handlers.bot.edit_message_text.call_args.kwargs["reply_markup"]
+    data = [b.callback_data for row in markup.keyboard for b in row]
+    assert "ai:providers_free" not in data
+
+
+# --- failures explain themselves and offer a way out -------------------------
+def test_rejected_key_shows_fixes_and_free_alternatives(env, mocker):
+    mocker.patch("services.ai_service.check_key", return_value=ai_service.KeyCheck(
+        False, "OpenAI: the account has no credit left", kind="no_credit",
+        hints=("This is a billing problem, not a broken key.",),
+        suggestions=providers.switch_suggestions("openai")))
+    ai_setup.apply_pending(_msg(text="sk-test"), "ai_key", {"provider": "openai"})
+    text = "\n".join(_sent())
+    assert "no credit left" in text
+    assert "How to fix it" in text
+    assert ai_service.has_api_key("openai") is False
+    markup = [call.kwargs.get("reply_markup") for call in handlers.bot.send_message.call_args_list]
+    data = [b.callback_data for kb in markup if kb for row in kb.keyboard for b in row]
+    assert "ai:freeswitch:google" in data
+    assert "ai:freeswitch:groq" in data
+
+
+def test_failed_test_offers_a_free_switch(env, mocker):
+    mocker.patch("services.ai_service.check_connection", return_value=ai_service.KeyCheck(
+        False, "Groq rejected this API key (HTTP 401)", kind="auth",
+        hints=("Check the key came from THIS provider.",),
+        suggestions=providers.switch_suggestions("groq")))
+    ai_setup.run_test(OWNER_CHAT)
+    text = "\n".join(_sent())
+    assert "How to fix it" in text
+    assert "Provider:" in text                     # the status block still shows
+    markup = handlers.bot.send_message.call_args.kwargs["reply_markup"]
+    data = [b.callback_data for row in markup.keyboard for b in row]
+    assert any(entry.startswith("ai:freeswitch:") for entry in data)
+    assert "ai:freeswitch:groq" not in data        # never the provider already in use
+
+
+def test_key_prompt_mentions_that_a_free_provider_needs_no_card(env, make_call):
+    ai_service.set_provider("google")
+    ai_setup.on_callback(make_call(data="ai:key"))
+    text = "\n".join(_sent())
+    assert "free — no credit card" in text
+    assert "aistudio.google.com" in text
+
+
+# --- live model list ---------------------------------------------------------
+def test_models_live_shows_the_providers_own_catalogue(env, make_call, mocker):
+    ai_service.set_provider("groq")
+    mocker.patch("services.ai_service.list_models",
+                 return_value=["llama-3.1-8b-instant", "gpt-oss-120b"])
+    ai_setup.on_callback(make_call(data="ai:models_live"))
+    text = "\n".join(_sent())
+    assert "2 models" in text
+    markup = handlers.bot.send_message.call_args.kwargs["reply_markup"]
+    data = [b.callback_data for row in markup.keyboard for b in row]
+    assert "ai:model:gpt-oss-120b" in data
+
+
+def test_models_live_failure_explains_itself(env, make_call, mocker):
+    from services.ai_service import AIServiceError
+    mocker.patch("services.ai_service.list_models",
+                 side_effect=AIServiceError("Groq rejected this API key (HTTP 401)",
+                                            kind="auth", hints=("Check the key.",)))
+    ai_setup.on_callback(make_call(data="ai:models_live"))
+    text = "\n".join(_sent())
+    assert "rejected this API key" in text
+    assert "Check the key." in text
+    assert "/aimodel" in text
+
+
+def test_models_live_with_an_empty_catalogue_falls_back_to_typing(env, make_call, mocker):
+    mocker.patch("services.ai_service.list_models", return_value=[])
+    ai_setup.on_callback(make_call(data="ai:models_live"))
+    assert "/aimodel" in "\n".join(_sent())
+
+
+def test_model_callback_keeps_a_colon_in_the_model_name(env, make_call):
+    """OpenRouter free models end in ':free' — the suffix must survive the callback."""
+    ai_service.set_provider("openrouter")
+    ai_setup.on_callback(make_call(
+        data="ai:model:meta-llama/llama-3.3-70b-instruct:free"))
+    assert ai_service.active_model("openrouter") == "meta-llama/llama-3.3-70b-instruct:free"
+
+
+def test_aimodel_command_keeps_a_colon_in_the_model_name(env):
+    ai_service.set_provider("openrouter")
+    ai_setup._set_model_from_command(
+        _msg(text="/aimodel meta-llama/llama-3.3-70b-instruct:free"))
+    assert ai_service.active_model("openrouter") == "meta-llama/llama-3.3-70b-instruct:free"

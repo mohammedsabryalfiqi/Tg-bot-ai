@@ -155,6 +155,11 @@ def _root_rows() -> list[dict]:
         "label": f"🧠 Model: {ai_service.active_model_label()}",
         "callback_data": keyboards.cb("ai", "models"),
     })
+    if not ai_service.is_ready() or providers.needs_credit(provider.id):
+        rows.insert(5, {
+            "label": "🆓 Free AI providers (no card)",
+            "callback_data": keyboards.cb("ai", "providers_free"),
+        })
     return rows
 
 

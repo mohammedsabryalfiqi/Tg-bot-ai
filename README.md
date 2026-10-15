@@ -26,10 +26,17 @@ The bot token comes from **@BotFather**.
 - 📚 **Knowledge base** (`/kb`): `.txt`, `.md`, `.pdf`, `.docx` with vector search
   (embeddings) and an automatic keyword-search fallback. Optional **strict KB
   mode** (answer only from the KB).
-- 🧩 **13 AI providers**, switchable from inside Telegram: OpenAI, Anthropic,
-  Google Gemini, Groq, OpenRouter, DeepSeek, Mistral, xAI, Together, any
-  OpenAI-compatible endpoint, **Ollama / LM Studio** (local, free) and your
-  **ChatGPT subscription via the Codex CLI**.
+- 🧩 **18 AI providers**, switchable from inside Telegram — **12 of them usable at
+  zero cost**: Google Gemini, Groq, Cerebras, OpenRouter, Mistral, NVIDIA NIM,
+  SambaNova, Hugging Face, Pollinations (**no key at all**), Ollama / LM Studio
+  (local), plus the paid ones (OpenAI, Anthropic, DeepSeek, xAI, Together) and any
+  OpenAI-compatible endpoint or your **ChatGPT subscription via the Codex CLI**.
+- 🆓 **`/freeai`** — a free-provider shortlist with each one's real limits, and a
+  one-tap switch. No credit card and no balance needed anywhere on that list.
+- 🩺 **Failures that explain themselves**: a rejected key, an account with no
+  credit, a wrong model name, a free-tier rate limit and a region block are
+  reported separately, each with the fix — plus **🔄 Load models**, which asks the
+  provider which models your key can actually run.
 - 🗣️ **Replies in the customer's language** (`reply_language=auto`), with tone and
   persona you configure (`assistant_name`, `business_name`, `tone`, `signature`).
 - 🧠 **Per-customer memory**, isolated per conversation.
@@ -67,8 +74,10 @@ a managed assistant — it does not chat there.
   Premium** on the account that connects the bot.
 - A bot created with **@BotFather**, with **Business Mode** enabled (some app
   versions call it **Secretary Mode**).
-- One AI provider: a free-tier key (Google Gemini, Groq, OpenRouter), a paid API
-  key, a **local model** (Ollama / LM Studio), or your ChatGPT plan via Codex CLI.
+- One AI provider — **a paid one is not required**: a free-tier key (Google
+  Gemini, Groq, Cerebras, Mistral, OpenRouter, …), a keyless endpoint
+  (Pollinations), a **local model** (Ollama / LM Studio), a paid API key, or your
+  ChatGPT plan via Codex CLI. Send `/freeai` inside Telegram for the shortlist.
 - A machine that stays on (PC, Raspberry Pi, VPS) — the bot must keep running to
   answer.
 
@@ -106,13 +115,29 @@ Send `/start 7B31F90C` (your code) to the bot in Telegram. It replies
 
 ### 4. Pick an AI provider — inside Telegram
 `/ai` → choose a provider → paste the API key → pick a model → **Test connection**.
+No credit card? Send **`/freeai`** (or tap **🆓 Free providers**) and pick one —
+the bot switches to it and asks for its key in the same tap.
 
-- 🆓 **Google Gemini** (`aistudio.google.com`), **Groq** (`console.groq.com`),
-  **OpenRouter** (free models available) — good for testing without a card.
-- 💻 **Ollama** (`http://localhost:11434/v1`) / **LM Studio** — free, local, needs
-  a decent machine.
-- 💳 **OpenAI**, **Anthropic Claude**, **DeepSeek**, **Mistral**, **xAI (Grok)**,
-  **Together**, or **custom** for any OpenAI-compatible gateway.
+- 🆓 **Google Gemini** (`aistudio.google.com/app/apikey`) — the most generous free
+  tier, a Google account is enough.
+- 🆓 **Groq** (`console.groq.com/keys`) and **Cerebras** (`cloud.cerebras.ai`) —
+  free with an email only, and by far the fastest.
+- 🆓 **OpenRouter** (`openrouter.ai/keys`) — one key, hundreds of models; use a
+  model whose name ends in `:free`.
+- 🆓 **Mistral**, **NVIDIA NIM**, **SambaNova**, **Hugging Face** — more free tiers.
+- 🔓 **Pollinations** — needs **no key at all** (slow and best effort: good to
+  prove the bot works today, not for a busy shop).
+- 💻 **Ollama** (`http://localhost:11434/v1`) / **LM Studio** — free, private,
+  local; needs a decent machine.
+- 💳 **OpenAI**, **Anthropic Claude**, **DeepSeek**, **xAI (Grok)**, **Together**,
+  or **custom** for any OpenAI-compatible gateway. These need **credit on the API
+  account** — a ChatGPT Plus or Claude subscription is *not* API credit, which is
+  the usual reason a brand-new key "does not work".
+
+Then press **🧪 Test connection**. If it fails the bot says exactly why (bad key ·
+no credit · unknown model · rate limit · region) and offers a free provider to
+switch to. If only the model name is wrong, use **🔄 Load models from the
+provider** to see the names your key can run.
 
 ### 5. Turn on Business (Secretary) mode
 1. **@BotFather** → `/mybots` → your bot.
@@ -166,7 +191,8 @@ watch the reply arrive from your own account. `/health` checks everything,
 | --- | --- |
 | `/start` | Control panel (inline buttons) |
 | `/setup` | Guided 6-step checklist with live status |
-| `/ai` (`/ai_setup`, `/connect_ai`, `/provider`) | Provider, API key, model, test |
+| `/ai` (`/ai_setup`, `/connect_ai`, `/provider`) | Provider, API key, model, live model list, test |
+| `/freeai` (`/freeproviders`) | Free providers only — no credit card, no balance |
 | `/aitest` · `/aimodel <name>` | Test the connection · set any model |
 | `/mode [auto\|draft\|off]` | How replies are sent |
 | `/faq` (`/qa`) | Quick-answers menu (`/faq_add`, `/faq_list`, `/faq_del`, `/faq_search`, `/faq_import`, `/faq_export`, `/faq_clear`) |
@@ -243,25 +269,73 @@ you never send a reply to a message that no longer exists.
 
 ## AI providers
 
-| Provider id | Label | Key required | Embeddings |
-| --- | --- | --- | --- |
-| `openai` | OpenAI (ChatGPT API) | yes | ✅ `text-embedding-3-small` |
-| `google` | Google Gemini | yes | ✅ `text-embedding-004` |
-| `groq` | Groq (fast, free tier) | yes | — |
-| `openrouter` | OpenRouter (many models, free ones) | yes | — |
-| `anthropic` | Anthropic (Claude) | yes | — |
-| `deepseek` | DeepSeek | yes | — |
-| `mistral` | Mistral AI | yes | — |
-| `xai` | xAI (Grok) | yes | — |
-| `together` | Together AI | yes | — |
-| `custom` | Any OpenAI-compatible endpoint | optional | maybe |
-| `ollama` | Ollama (local, free) | no | ✅ `nomic-embed-text` |
-| `lmstudio` | LM Studio (local, free) | no | — |
-| `codex` | ChatGPT subscription via Codex CLI | no | — |
+| Provider id | Label | Cost | Key required | Embeddings |
+| --- | --- | --- | --- | --- |
+| `google` | Google Gemini | 🆓 free tier | yes | ✅ `text-embedding-004` |
+| `groq` | Groq | 🆓 free tier | yes | — |
+| `cerebras` | Cerebras | 🆓 free tier | yes | — |
+| `openrouter` | OpenRouter | 🆓 `:free` models | yes | — |
+| `mistral` | Mistral AI | 🆓 free tier | yes | — |
+| `nvidia` | NVIDIA NIM | 🆓 signup credits | yes | — |
+| `sambanova` | SambaNova | 🆓 free tier | yes | — |
+| `huggingface` | Hugging Face | 🆓 small allowance | yes | — |
+| `pollinations` | Pollinations | 🆓 no key needed | **no** | — |
+| `ollama` | Ollama (local) | 💻 free, local | no | ✅ `nomic-embed-text` |
+| `lmstudio` | LM Studio (local) | 💻 free, local | no | — |
+| `codex` | ChatGPT plan via Codex CLI | 💻 your subscription | no | — |
+| `openai` | OpenAI (ChatGPT API) | 💳 credit needed | yes | ✅ `text-embedding-3-small` |
+| `anthropic` | Anthropic (Claude) | 💳 credit needed | yes | — |
+| `deepseek` | DeepSeek | 💳 top-up needed | yes | — |
+| `xai` | xAI (Grok) | 💳 credit needed | yes | — |
+| `together` | Together AI | 💳 credit needed | yes | — |
+| `custom` | Any OpenAI-compatible endpoint | depends | optional | maybe |
 
 Providers without embeddings still use the knowledge base through keyword search.
 Keys set in `.env` win over keys stored from Telegram; keys stored from Telegram are
 encrypted at rest when `SMARTEL_FERNET_KEY` is set.
+
+### 🆓 Free providers (no credit card, no balance)
+
+`/freeai` prints this list inside Telegram with the current limits, and one tap
+switches the bot to any of them. Where to get each key:
+
+| Provider | Free key from | What you get free | Notes |
+| --- | --- | --- | --- |
+| **Google Gemini** | `aistudio.google.com/app/apikey` | Hundreds of requests/day on the Flash models, 1M-token context | The most generous tier; only a Google account is needed. Also powers KB embeddings. |
+| **Groq** | `console.groq.com/keys` | ~30 requests/min, thousands/day on small models | Fastest replies of all; email signup only. |
+| **Cerebras** | `cloud.cerebras.ai` → API Keys | ~1M tokens/day | Very fast; the free model catalogue rotates, so use 🔄 Load models. |
+| **OpenRouter** | `openrouter.ai/keys` | ~50 free requests/day | Use a model ending in `:free`; any other model needs credit. |
+| **Mistral** | `console.mistral.ai/api-keys` | Free "Experiment" plan, ~1 request/s | No card, but phone verification; prompts may train their models unless you opt out. |
+| **NVIDIA NIM** | `build.nvidia.com` | Free API credits at signup | Credits run out instead of refreshing daily; copy model names exactly (`meta/llama-3.1-8b-instruct`). |
+| **SambaNova** | `community.sambanova.ai` | Free developer key | Fast open models, rate limited. |
+| **Hugging Face** | `huggingface.co/settings/tokens` | Small monthly allowance | A "Read" token is enough; gated models must be accepted on their page once. |
+| **Pollinations** | — (no key) | Unlimited-ish but throttled | ⚠️ Community endpoint: ~1 request per 30s per IP, no uptime promise, customer text goes to a third party. Fine for a first test, not for a busy shop. |
+| **Ollama / LM Studio** | — (local) | Everything, forever | 💻 100% free and private; the bot must run on the same machine. |
+
+Free tiers are **rate limited** (per minute / per day) and reset on their own —
+that is not a broken key. Stack two or three providers and switch with `/ai` if
+you hit a ceiling.
+
+### "My key does not work" — what the bot now tells you
+
+Every failure is classified, so the message says what to do instead of a bare
+"not accepted":
+
+| What you see | What it means | Fix |
+| --- | --- | --- |
+| `the account has no credit left or its free quota is used up` | The key is valid but there is no money/quota behind it. Common with OpenAI, Anthropic, DeepSeek, Together — a ChatGPT/Claude **subscription is not API credit**. | Add credit, or tap a 🆓 free provider the bot offers in the same message (`/freeai`). |
+| `That is your Telegram bot token (from @BotFather), not an AI API key` | The `123456789:AA…` token was pasted into the AI-key field. | Nothing to fix in Telegram — paste the **AI provider's** key instead (the bot recognises the shape and says this before sending any request). |
+| `This looks like a key for <provider>, but you are adding it to <other>` | A key from another provider (e.g. a Gemini `AIza…` key while Groq is selected). | Switch to the provider the key belongs to, or get a key for the selected one. |
+| `rejected this API key (HTTP 401/403)` | The key itself is wrong, expired, revoked, pasted with spaces, or from a **different provider**. | Copy it again from the right console; the message names the exact URL. |
+| `Finish the account verification first` | The provider still wants email/phone verification (e.g. Mistral). | Verify the account, then re-send the key. |
+| `rejected the model name` | The key cannot run that model, or the name differs on this provider. | `/ai` → 🧠 Change model → **🔄 Load models from the provider**. |
+| `hit a rate/quota limit` / `rate limiting the bot right now` | Free-tier ceiling (per minute/day). **Nothing is broken** — it resets by itself. | Wait a moment; or move to Gemini/Groq/Cerebras for a bigger daily quota. |
+| `refused the request because of your country/region` | The provider does not serve your region. | Switch provider — the free ones above all work widely. |
+| `404 — the base URL or the endpoint path is wrong` | Wrong endpoint (usually missing `/v1`). | Fix the base URL (`/ai` → 🌐 Set base URL for `custom`). |
+| `Could not reach the provider` | Network/DNS/firewall on the machine running the bot. | Check internet access from that machine. |
+
+The same diagnosis appears in `/health`, in `python main.py --check`, and in the
+notification sent when a customer reply could not be generated.
 
 ### ChatGPT subscription via the Codex CLI (optional)
 ```bash
@@ -286,10 +360,14 @@ BOT_TOKEN=123456789:AA...          # from @BotFather
 OWNER_USER_ID=                     # optional; empty ⇒ use the printed claim code
 ALLOW_OWNER_CLAIM=true             # set false to forbid claiming
 
-AI_PROVIDER=openai                 # openai|anthropic|google|groq|openrouter|
-                                   # deepseek|mistral|xai|together|custom|
-                                   # ollama|lmstudio|codex
-AI_API_KEY=                        # or OPENAI_API_KEY / ANTHROPIC_API_KEY / …
+AI_PROVIDER=google                 # free: google|groq|cerebras|openrouter|mistral|
+                                   #       nvidia|sambanova|huggingface|pollinations|
+                                   #       ollama|lmstudio
+                                   # paid: openai|anthropic|deepseek|xai|together
+                                   # other: custom|codex
+AI_API_KEY=                        # or GEMINI_API_KEY / GROQ_API_KEY /
+                                   # CEREBRAS_API_KEY / OPENAI_API_KEY / …
+                                   # (pollinations, ollama, lmstudio need no key)
 AI_MODEL=                          # empty ⇒ the provider's default model
 AI_BASE_URL=                       # required for `custom`, useful for local models
 
@@ -358,6 +436,9 @@ sudo systemctl enable --now smartel && journalctl -u smartel -f
 | No customer messages arrive | Business Mode off in BotFather, bot not connected under **Telegram Business → Chat Bots**, or the account is not Premium. |
 | The bot reads but never replies | Enable **"Allow bot to reply to messages"** in the bot's Business permissions; verify with `/status`. |
 | Replies are generic / the bot apologises | Key invalid or out of quota: `/ai` → **Test connection**, or `/health`. |
+| "The key was not accepted" although I just created it | The bot now says *why*: no credit on the account, key from another provider, verification pending, wrong model name, rate limit or region block. Read the **How to fix it** bullets under the error, and see ["My key does not work"](#my-key-does-not-work--what-the-bot-now-tells-you). |
+| I have no credit card / no balance | `/freeai` → pick **Google Gemini**, **Groq** or **Cerebras** (free with an email/Google account), or **Pollinations** which needs no key at all. One tap switches the bot and asks for the new key. |
+| The model name is refused | `/ai` → 🧠 Change model → **🔄 Load models from the provider**: it lists what your key can actually run. |
 | Nothing happens in one chat | That chat is paused (earlier takeover or rate limit): `/chats`, `/handback <chat_id>`. |
 | `409 Conflict` in the logs | Another instance is polling with the same token — stop it. |
 | It doesn't know my info | Add content: `/faq_add` for frequent questions, `/kb_upload` for documents; consider `strict_kb_mode`. |

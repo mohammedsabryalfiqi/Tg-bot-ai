@@ -337,16 +337,20 @@ def _choose_provider() -> tuple[str, str, str, str, str, str]:
 
     ordered = _providers.ordered()
     print("\n3) AI provider — who should generate the replies?")
+    print("   Free options are listed first — they need no credit card and no balance.")
     for index, provider in enumerate(ordered, start=1):
         flags = []
-        if provider.free_tier:
-            flags.append("free tier")
         if provider.local:
-            flags.append("runs on this machine")
-        suffix = f"  ({', '.join(flags)})" if flags else ""
-        print(f"     {index:2d}) {provider.label}{suffix}")
-    print("      0) Configure later from Telegram with /ai  (recommended)")
-    raw = input("   Select [0-13] (default 0): ").strip() or "0"
+            flags.append("free, runs on this machine")
+        elif provider.free_tier:
+            flags.append("FREE tier")
+        elif not provider.key_required:
+            flags.append("no key needed")
+        else:
+            flags.append("paid credit required")
+        print(f"     {index:2d}) {provider.label}  ({', '.join(flags)})")
+    print("      0) Configure later from Telegram with /ai or /freeai  (recommended)")
+    raw = input(f"   Select [0-{len(ordered)}] (default 0): ").strip() or "0"
 
     if raw == "0":
         return ("openai", "", "", "", "", "")
