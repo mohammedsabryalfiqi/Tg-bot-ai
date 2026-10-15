@@ -340,7 +340,7 @@ def test_validate_key_maps_errors(db, monkeypatch):
 def test_validate_key_requires_a_key_for_key_providers(db):
     ok, message = svc.validate_key("openai", "")
     assert ok is False
-    assert "No key" in message
+    assert "No API key" in message
 
 
 def test_validate_key_without_key_for_local_provider(db, monkeypatch):
@@ -367,8 +367,14 @@ def test_status_lines_include_provider_and_embeddings(db):
 # --- provider registry -------------------------------------------------------
 def test_registry_ordering_is_stable():
     ids = providers.ids()
-    assert ids[0] == "openai"
     assert set(ids) == set(providers.PROVIDERS)
+    assert len(ids) == len(set(ids))
+    # Free providers are listed first: an owner without a credit card should not
+    # have to scroll past the paid ones.
+    first_paid = ids.index("openai")
+    assert ids[0] == "google"
+    assert all(ids.index(pid) < first_paid for pid in providers.free_ids()
+               if not providers.PROVIDERS[pid].local)
 
 
 def test_every_provider_is_reachable_via_get():

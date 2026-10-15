@@ -83,8 +83,10 @@ def mode_keyboard(current: str) -> types.InlineKeyboardMarkup:
 # =============================================================================
 def ai_root(has_key: bool, is_ready: bool, provider_label: str) -> types.InlineKeyboardMarkup:
     kb = types.InlineKeyboardMarkup(row_width=1)
+    kb.add(_btn("🆓 Free providers (no credit card)", cb("ai", "providers_free")))
     kb.add(_btn("🔁 Change provider", cb("ai", "providers")))
     kb.add(_btn("🧠 Change model", cb("ai", "models")))
+    kb.add(_btn("🔄 Load models from the provider", cb("ai", "models_live")))
     kb.add(_btn("🔑 Add / update API key", cb("ai", "key")))
     kb.add(_btn("🧪 Test connection", cb("ai", "test")))
     if has_key:
@@ -93,39 +95,81 @@ def ai_root(has_key: bool, is_ready: bool, provider_label: str) -> types.InlineK
     return kb
 
 
-def ai_providers(active_id: str) -> types.InlineKeyboardMarkup:
-    kb = types.InlineKeyboardMarkup(row_width=1)
+def _provider_label(provider, active_id: str) -> str:
+    mark = "• " if provider.id == active_id else ""
+    label = f"{mark}{provider.label}"
+    if provider.local:
+        label += "  💻"
+    elif provider.free_tier:
+        label += "  🆓"
+    elif not provider.key_required:
+        label += "  🔓"
+    return label
+
+
+def ai_providers(active_id: str, free_only: bool = False) -> types.InlineKeyboardMarkup:
+    """Provider picker. ``free_only`` shows just the zero-cost options."""
     from services import providers as _providers
-    for provider in _providers.ordered():
-        mark = "• " if provider.id == active_id else ""
-        label = f"{mark}{provider.label}"
-        if provider.free_tier:
-            label += "  🆓"
-        if provider.local:
-            label += "  💻"
-        kb.add(_btn(label, cb("ai", "provider", provider.id)))
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    shown = _providers.free() if free_only else _providers.ordered()
+    for provider in shown:
+        kb.add(_btn(_provider_label(provider, active_id), cb("ai", "provider", provider.id)))
+    if free_only:
+        kb.add(_btn("🔁 Show every provider", cb("ai", "providers")))
+    else:
+        kb.add(_btn("🆓 Only the free ones", cb("ai", "providers_free")))
     kb.add(_btn("« Back", cb("ai", "root")))
     return kb
 
 
-def ai_models(models: list[str], current: str) -> types.InlineKeyboardMarkup:
+def ai_free_switch(suggestions, active_id: str = "") -> types.InlineKeyboardMarkup:
+    """"Switch to this free provider" buttons, shown after a key/quota failure.
+
+    One tap moves the owner to a working free backend and asks for its key.
+    """
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    for provider in suggestions:
+        if provider.key_required:
+            text = f"🆓 Switch to {provider.label}"
+            kb.add(_btn(text, cb("ai", "freeswitch", provider.id)))
+        else:
+            kb.add(_btn(f"🆓 Switch to {provider.label} (no key)",
+                        cb("ai", "freeswitch", provider.id)))
+    kb.add(_btn("🔑 Send the same key again", cb("ai", "key")))
+    kb.add(_btn("« Back to the AI menu", cb("ai", "root")))
+    return kb
+
+
+def ai_models(models: list[str], current: str, can_refresh: bool = True,
+              ) -> types.InlineKeyboardMarkup:
     kb = types.InlineKeyboardMarkup(row_width=1)
     for model in models:
         mark = "• " if model == current else ""
-        kb.add(_btn(f"{mark}{model}", cb("ai", "model", model)))
+        try:
+            data = cb("ai", "model", model)
+        except ValueError:
+            continue          # Telegram callback data is capped at 64 bytes
+        kb.add(_btn(f"{mark}{model[:58]}", data))
+    if can_refresh:
+        kb.add(_btn("🔄 Load models from the provider", cb("ai", "models_live")))
     kb.add(_btn("✏️ Type another model name", cb("ai", "model_custom")))
     kb.add(_btn("« Back", cb("ai", "root")))
     return kb
 
 
 def ai_provider_actions(provider_id: str, key_required: bool) -> types.InlineKeyboardMarkup:
+    from services import providers as _providers
     kb = types.InlineKeyboardMarkup(row_width=1)
     if key_required:
         kb.add(_btn("🔑 Send API key now", cb("ai", "key")))
     kb.add(_btn("🧠 Choose model", cb("ai", "models")))
+    kb.add(_btn("🔄 Load models from the provider", cb("ai", "models_live")))
     if provider_id == "custom":
         kb.add(_btn("🌐 Set base URL", cb("ai", "base_url")))
     kb.add(_btn("🧪 Test connection", cb("ai", "test")))
+    if not _providers.get(provider_id) or not _providers.is_free(
+            _providers.get_or_default(provider_id)):
+        kb.add(_btn("🆓 Free providers instead", cb("ai", "providers_free")))
     kb.add(_btn("« Back", cb("ai", "providers")))
     return kb
 

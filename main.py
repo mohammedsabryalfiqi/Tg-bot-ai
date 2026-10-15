@@ -164,6 +164,7 @@ def set_bot_commands(bot: telebot.TeleBot) -> None:
         ("setup", "Guided setup checklist"),
         ("mode", "Auto-reply / draft / off"),
         ("ai", "AI provider, key, model"),
+        ("freeai", "Free AI providers (no credit card)"),
         ("aitest", "Test the AI connection"),
         ("faq", "Quick answers (canned replies)"),
         ("kb", "Knowledge base menu"),
@@ -250,6 +251,10 @@ def _check_backend_ready(cfg: config.Config) -> None:
         log.warning("No AI key configured for provider '%s'. Open the bot in Telegram "
                     "and use /ai to add one (or set AI_API_KEY in .env).",
                     ai_service.active_provider_id())
+    if providers.needs_credit(provider.id):
+        log.info("'%s' is a paid provider: its key only works while the account has "
+                 "credit. Free alternatives (no card): /freeai in Telegram, or "
+                 "AI_PROVIDER=google|groq|cerebras in .env.", provider.id)
 
 
 def _notify_startup(bot: telebot.TeleBot, cfg: config.Config, me: dict,
@@ -263,10 +268,15 @@ def _notify_startup(bot: telebot.TeleBot, cfg: config.Config, me: dict,
             f"✅ <b>SmarTel {VERSION} is online</b> as @{utils.escape(me['username'])}.\n"
             f"Mode: <b>{owner_tools.current_mode()}</b>\n"
             f"AI: <b>{'ready' if ai_service.is_ready() else 'not configured — open /ai'}</b> "
-            f"({utils.escape(ai_service.backend_label())})\n\n"
+            f"({utils.escape(ai_service.backend_label())})\n"
+            f"Cost: {utils.escape(ai_service.cost_label())}\n\n"
             "First time? Run /setup for the checklist "
             "(BotFather Business Mode + Telegram Business → Chatbots)."
         )
+        if not ai_service.is_ready():
+            text += ("\n\n💡 No API key yet, or your key has no credit? Send /freeai "
+                     "for the providers that cost nothing — Google Gemini, Groq and "
+                     "Cerebras need no credit card.")
         if interrupted_deliveries:
             text += (
                 "\n\n⚠️ <b>Manual review required:</b> "
@@ -297,7 +307,10 @@ def _print_banner(cfg: config.Config, me: dict, claim_code: str | None) -> None:
         print(" This code is shown only in this terminal. It changes on restart")
         print(" until the owner has been claimed.")
         print("-" * 64)
+    print(f" Cost:         {ai_service.cost_label()}")
     print(" Next steps in Telegram:  /setup  →  /ai  →  /faq  →  /mode")
+    if not ai_service.is_ready() or providers.needs_credit(ai_service.active_provider_id()):
+        print(" No card / no credit?   /freeai lists the free AI providers")
     print(" Press Ctrl-C to stop.\n")
 
 
@@ -313,10 +326,17 @@ def run_check(cfg: config.Config) -> int:
     print(f"Base URL:   {ai_service.active_base_url() or '<none>'}")
     print(f"Key:        {ai_service.masked_active_key()} (source: {ai_service.key_source()})")
     print(f"Ready:      {ai_service.is_ready()}")
+    print(f"Cost:       {ai_service.cost_label(provider)}")
     print(f"Embeddings: {ai_service.supports_embeddings()}")
-    ok, message = ai_service.test_connection()
-    print(f"Live test:  {'OK' if ok else 'FAILED'} — {message}")
-    return 0 if ok else 1
+    result = ai_service.check_connection()
+    print(f"Live test:  {'OK' if result.ok else 'FAILED'} — {result.message}")
+    for hint in result.hints:
+        print(f"            • {hint}")
+    if result.suggestions:
+        print("            Free alternatives: "
+              + ", ".join(p.label for p in result.suggestions)
+              + "  (or /freeai in Telegram)")
+    return 0 if result.ok else 1
 
 
 # =============================================================================

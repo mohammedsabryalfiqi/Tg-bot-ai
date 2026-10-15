@@ -15,6 +15,7 @@ import logging
 
 import database
 import handlers
+import keyboards
 import telegram_api
 import utils
 from handlers import approvals
@@ -23,6 +24,7 @@ from services import (
     business_service,
     memory_service,
     prompt_service,
+    providers,
     rate_limit_service,
 )
 from services import ai_service
@@ -223,11 +225,21 @@ def _generate_reply(conn, customer_chat_id: int, customer_text: str) -> str | No
         return ai_service.chat(messages)
     except AIServiceError as e:
         name = business_service.customer_display_name(bcid, customer_chat_id)
-        handlers.notify_owner(
+        lines = [
             f"⚠️ Could not generate a reply for <b>{utils.escape(name)}</b> "
-            f"(chat <code>{customer_chat_id}</code>): {utils.escape(e.owner_message)}\n\n"
-            "No message was sent to the customer."
-        )
+            f"(chat <code>{customer_chat_id}</code>): {utils.escape(e.owner_message)}",
+            "",
+            "No message was sent to the customer.",
+        ]
+        if e.hints:
+            lines.append("")
+            lines += [f"• {utils.escape(hint)}" for hint in e.hints[:3]]
+        markup = None
+        suggestions = providers.switch_suggestions(ai_service.active_provider_id()) \
+            if e.kind in ai_service.SWITCHABLE_KINDS else []
+        if suggestions:
+            markup = keyboards.ai_free_switch(suggestions)
+        handlers.notify_owner("\n".join(lines), reply_markup=markup)
         log.warning("AI generation failed kind=%s chat=%s",
                     e.kind, utils.mask_id(customer_chat_id))
         return None

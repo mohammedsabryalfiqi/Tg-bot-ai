@@ -132,6 +132,7 @@ HELP_TEXT = (
     "/export — backup file (settings + quick answers)\n\n"
     "<b>AI setup</b>\n"
     "/ai — provider, API key, model, test · /aitest — quick test\n"
+    "/freeai — providers that cost nothing (no credit card, no balance)\n"
     "/aimodel &lt;name&gt; — set a model · /instructions — standing instructions\n\n"
     "<b>Answers</b>\n"
     "/faq — quick answers menu (exact replies, sent instantly)\n"
@@ -168,6 +169,8 @@ def _status_text() -> str:
         lines.append(f"   {utils.escape(line)}")
     if provider.key_url and not ai_service.has_api_key(provider.id) and provider.key_required:
         lines.append(f"   Get a key: {utils.escape(provider.key_url)}")
+    if not ai_service.is_ready() or providers.needs_credit(provider.id):
+        lines.append("   💡 /freeai — AI providers that need no credit card or balance.")
     lines.append("")
     conns = st["connections"]
     if not conns:

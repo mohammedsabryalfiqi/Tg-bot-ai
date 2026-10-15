@@ -199,6 +199,50 @@ codex login                       # choose "Sign in with ChatGPT"
 
 ---
 
+### ارائه‌دهنده‌های رایگانِ هوش مصنوعی (بدون کارت اعتباری)
+
+اگر کارت اعتباری یا موجودی ندارید، نیازی به پرداخت نیست: در تلگرام **`/freeai`** را
+بفرستید تا فهرست کاملِ گزینه‌های رایگان (همراه با محدودیتِ واقعیِ هرکدام) نمایش داده
+شود و با یک لمس، ربات روی آن ارائه‌دهنده جابه‌جا شود و کلیدش را از شما بخواهد.
+
+| ارائه‌دهنده | دریافت کلید | چه چیزی رایگان است | نکته |
+|---|---|---|---|
+| **Google Gemini** | `aistudio.google.com/app/apikey` | صدها درخواست در روز روی مدل‌های Flash، با پنجرهٔ یک میلیون توکن | سخاوتمندانه‌ترین لایهٔ رایگان؛ فقط یک حساب گوگل لازم است. امبدینگِ پایگاه دانش را هم پشتیبانی می‌کند. |
+| **Groq** | `console.groq.com/keys` | ~۳۰ درخواست در دقیقه و هزاران درخواست در روز | سریع‌ترین پاسخ‌ها؛ فقط با ایمیل. |
+| **Cerebras** | `cloud.cerebras.ai` → API Keys | ~۱ میلیون توکن در روز | خیلی سریع؛ فهرست مدل‌های رایگانش تغییر می‌کند، پس از 🔄 Load models استفاده کنید. |
+| **OpenRouter** | `openrouter.ai/keys` | ~۵۰ درخواست رایگان در روز | مدلی را انتخاب کنید که به `:free` ختم شود؛ بقیه نیاز به اعتبار دارند. |
+| **Mistral** | `console.mistral.ai/api-keys` | پلن رایگان «Experiment»، ~۱ درخواست در ثانیه | بدون کارت، ولی تأیید شمارهٔ موبایل لازم است. |
+| **NVIDIA NIM** | `build.nvidia.com` | اعتبار رایگان هنگام ثبت‌نام | اعتبار تمام می‌شود و روزانه شارژ نمی‌شود؛ نام مدل را دقیقاً کپی کنید. |
+| **SambaNova** | `community.sambanova.ai` | کلید رایگان توسعه‌دهنده | مدل‌های بازِ سریع، با محدودیت نرخ. |
+| **Hugging Face** | `huggingface.co/settings/tokens` | سهمیهٔ ماهانهٔ کوچک | توکن با دسترسی «Read» کافی است. |
+| **Pollinations** | — (بدون کلید) | رایگان ولی بسیار محدود | ⚠️ سرویس اجتماعی: ~یک درخواست در هر ۳۰ ثانیه برای هر IP، بدون ضمانتِ در دسترس بودن. برای آزمایش اولیه خوب است، نه برای فروشگاهِ شلوغ. |
+| **Ollama / LM Studio** | — (محلی) | همه‌چیز، برای همیشه | 💻 کاملاً رایگان و خصوصی؛ ربات باید روی همان ماشین اجرا شود. |
+
+لایه‌های رایگان **محدودیت نرخ** دارند (در دقیقه/روز) و خودکار بازنشانی می‌شوند — این
+به معنای خراب بودن کلید نیست.
+
+### «کلیدم کار نمی‌کند» — ربات حالا دقیقاً چه می‌گوید
+
+هر خطا دسته‌بندی می‌شود و راه‌حلِ همان حالت را نشان می‌دهد:
+
+| پیام | معنا | راه‌حل |
+|---|---|---|
+| `the account has no credit left or its free quota is used up` | کلید درست است ولی اعتبار/سهمیه‌ای پشتش نیست. در OpenAI، Anthropic، DeepSeek و Together رایج است — **اشتراک ChatGPT یا Claude اعتبارِ API نیست**. | اعتبار اضافه کنید، یا روی یکی از دکمه‌های 🆓 در همان پیام بزنید (یا `/freeai`). |
+| `That is your Telegram bot token (from @BotFather), not an AI API key` | **توکنِ ربات** (`123456789:AA…`) را در فیلدِ کلیدِ هوش مصنوعی چسبانده‌اید. | چیزی در تلگرام خراب نیست؛ کلیدِ خودِ ارائه‌دهندهٔ هوش مصنوعی را بفرستید. ربات شکلِ توکن را تشخیص می‌دهد و پیش از هر درخواست به شما می‌گوید. |
+| `This looks like a key for <provider>, but you are adding it to <other>` | کلید متعلق به ارائه‌دهندهٔ دیگری است (مثلاً کلید Gemini با `AIza` وقتی Groq انتخاب شده). | یا ارائه‌دهنده را عوض کنید، یا کلیدِ همان ارائه‌دهنده را بسازید. |
+| `rejected this API key (HTTP 401/403)` | خودِ کلید اشتباه، منقضی، لغوشده، همراه با فاصله کپی‌شده، یا **مربوط به ارائه‌دهندهٔ دیگری** است. | دوباره از کنسولِ درست کپی کنید؛ آدرس دقیق در پیام آمده است. |
+| `Finish the account verification first` | ارائه‌دهنده هنوز تأیید ایمیل/موبایل می‌خواهد (مثل Mistral). | حساب را تأیید و کلید را دوباره بفرستید. |
+| `rejected the model name` | کلید شما به آن مدل دسترسی ندارد یا نامش در این ارائه‌دهنده فرق می‌کند. | `/ai` → 🧠 Change model → **🔄 Load models from the provider**. |
+| `rate limiting the bot right now` | به سقف لایهٔ رایگان رسیده‌اید. | کمی صبر کنید؛ خودش بازنشانی می‌شود. یا به Gemini/Groq/Cerebras بروید. |
+| `refused the request because of your country/region` | ارائه‌دهنده به منطقهٔ شما سرویس نمی‌دهد. | ارائه‌دهنده را عوض کنید. |
+| `404 — the base URL or the endpoint path is wrong` | آدرس اشتباه است (معمولاً `/v1` جا افتاده). | `/ai` → 🌐 Set base URL. |
+| `Could not reach the provider` | مشکل شبکه/DNS/فایروال روی ماشینِ اجراکنندهٔ ربات. | اتصال اینترنت همان ماشین را بررسی کنید. |
+
+همین تشخیص در `/health`، در `python main.py --check` و در پیامِ اطلاع‌رسانیِ «پاسخ
+تولید نشد» هم نمایش داده می‌شود.
+
+---
+
 ## ۴) اجرا
 
 <div dir="ltr">
@@ -244,8 +288,11 @@ long-polling را آغاز می‌کند (الزامی است — وگرنه ه�
 | `/help` | Usage guide |
 | `/status` | Bot, AI backend & Business connection status |
 | `/settings` | Open the settings menu |
-| `/connect_openai` | Add/update the OpenAI API key |
-| `/disconnect_openai` | Remove the OpenAI API key |
+| `/ai` | AI provider, API key, model, live model list, test |
+| `/freeai` | Free providers only (no credit card, no balance) |
+| `/aitest` · `/aimodel <name>` | Test the connection · set any model |
+| `/connect_openai` | Add/update the API key of the active provider |
+| `/disconnect_openai` | Remove that API key |
 | `/auto_on` · `/auto_off` | Enable/disable automatic replies |
 | `/approval_on` · `/approval_off` | Require/skip approval before sending |
 | `/instructions [text\|clear]` | Show / set / clear the standing instruction |
@@ -470,8 +517,11 @@ ChatGPT شما می‌آیند. مواردی که **پیش از** در دستر�
   `.env` برابر فلگ‌هایی بگذارید که نسخهٔ Codex شما می‌پذیرد و از موفقیت `codex login`
   مطمئن شوید.
 - **هیچ پاسخی تولید نمی‌شود** ← `/status` را ببینید (*AI backend: ready*)؛ کلید را با
-  `/connect_openai` دوباره اضافه کنید، `openai_model` را بررسی کنید، یا از ورود
-  Codex مطمئن شوید.
+  `/ai` دوباره اضافه کنید، مدل را بررسی کنید، یا از ورود Codex مطمئن شوید.
+- **کلید رد می‌شود یا موجودی ندارد** ← پیامِ ربات حالا علت را جدا می‌گوید (کلیدِ
+  اشتباه، نبودِ اعتبار، نامِ مدلِ نامعتبر، محدودیت نرخ، مسدودیت منطقه). اگر اعتبار
+  ندارید `/freeai` را بفرستید و یکی از ارائه‌دهنده‌های رایگان را انتخاب کنید؛ برای
+  نام مدل هم از `/ai` → 🔄 Load models استفاده کنید.
 - **مالک پیام‌ها را دریافت نمی‌کند** ← `OWNER_USER_ID` را بررسی و یک‌بار به ربات
   `/start` بدهید.
 - **PDF اضافه شد ولی متنی نیامد** ← PDFهای اسکن‌شده/تصویری پشتیبانی نمی‌شوند (بدون OCR).

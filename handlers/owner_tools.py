@@ -24,7 +24,7 @@ import keyboards
 import security
 import telegram_api
 import utils
-from services import ai_service, business_service, faq_service, memory_service
+from services import ai_service, business_service, faq_service, memory_service, providers
 
 log = logging.getLogger("smartel.tools")
 
@@ -317,8 +317,12 @@ def health_report() -> str:
                      f"<code>{utils.escape(ai_service.active_model_label())}</code>")
     else:
         lines.append("❌ AI not configured — open /ai to add a key or pick a provider.")
+    lines.append(f"ℹ️ Cost: {utils.escape(ai_service.cost_label(provider))}")
     lines.append(f"ℹ️ Embeddings: "
                  f"{'available' if ai_service.supports_embeddings() else 'not available (keyword search)'}")
+    if not ai_service.is_ready() or providers.needs_credit(provider.id):
+        lines.append("💡 Key rejected or no balance? /freeai lists providers that cost "
+                     "nothing (Google Gemini, Groq, Cerebras, Mistral…).")
 
     # Business connection
     conns = database.list_business_connections()
