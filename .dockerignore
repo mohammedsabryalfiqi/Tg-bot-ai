@@ -1,0 +1,27 @@
+# Keep the image small and free of secrets/local state.
+.git
+.github
+.venv
+venv
+env
+__pycache__
+*.py[codz]
+.pytest_cache
+.mypy_cache
+.ruff_cache
+htmlcov
+.coverage
+coverage.xml
+junit.xml
+.env
+.env.*
+!.env.example
+*.db
+*.db-wal
+*.db-shm
+storage/uploads/*
+!storage/uploads/.gitkeep
+storage/vector_store/*
+!storage/vector_store/.gitkeep
+tests
+README_FA.md
