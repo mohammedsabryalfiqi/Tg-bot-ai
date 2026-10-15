@@ -24,6 +24,7 @@ RUN mkdir -p storage/uploads storage/vector_store \
     && chown -R smartel:smartel /app
 USER smartel
 
-VOLUME ["/app/storage"]
+# Persistent data (SQLite DB, uploads) lives in /app/storage. On Railway, attach a
+# Railway Volume mounted at /app/storage (Dockerfile VOLUME is not supported).
 
 CMD ["python", "main.py"]
