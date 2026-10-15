@@ -159,9 +159,14 @@ def ai_models(models: list[str], current: str, can_refresh: bool = True,
 
 def ai_provider_actions(provider_id: str, key_required: bool) -> types.InlineKeyboardMarkup:
     from services import providers as _providers
+    # Some endpoints need no key but still accept one (self-hosted OmniRoute with
+    # REQUIRE_API_KEY=true); Ollama/LM Studio expose no key env var at all.
+    optional_key = not key_required and bool(_providers.key_env_var(provider_id))
     kb = types.InlineKeyboardMarkup(row_width=1)
     if key_required:
         kb.add(_btn("🔑 Send API key now", cb("ai", "key")))
+    elif optional_key:
+        kb.add(_btn("🔑 Send API key (optional)", cb("ai", "key")))
     kb.add(_btn("🧠 Choose model", cb("ai", "models")))
     kb.add(_btn("🔄 Load models from the provider", cb("ai", "models_live")))
     if provider_id == "custom":

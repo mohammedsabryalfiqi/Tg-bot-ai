@@ -425,3 +425,28 @@ def test_aimodel_command_keeps_a_colon_in_the_model_name(env):
     ai_setup._set_model_from_command(
         _msg(text="/aimodel meta-llama/llama-3.3-70b-instruct:free"))
     assert ai_service.active_model("openrouter") == "meta-llama/llama-3.3-70b-instruct:free"
+
+
+# --- OmniRoute (keyless self-hosted gateway) ---------------------------------
+def test_omniroute_provider_screen_shows_its_endpoint(env, make_call):
+    ai_setup.on_callback(make_call(data="ai:provider:omniroute"))
+    assert database.get_str("ai_provider") == "omniroute"
+    text = handlers.bot.edit_message_text.call_args.args[0]
+    assert "OmniRoute" in text
+    assert "http://localhost:20128/v1" in text
+    assert "Send the base URL" not in text
+
+
+def test_omniroute_menu_offers_an_optional_key(env, make_call):
+    ai_setup.on_callback(make_call(data="ai:provider:omniroute"))
+    labels = [b.text for row in handlers.bot.edit_message_text.call_args.kwargs
+              ["reply_markup"].keyboard for b in row]
+    assert any("optional" in label for label in labels)
+    assert "🌐 Set base URL" not in labels
+
+
+def test_ollama_menu_has_no_key_button(env, make_call):
+    ai_setup.on_callback(make_call(data="ai:provider:ollama"))
+    labels = [b.text for row in handlers.bot.edit_message_text.call_args.kwargs
+              ["reply_markup"].keyboard for b in row]
+    assert not any("key" in label.lower() for label in labels)

@@ -375,6 +375,11 @@ def _choose_provider() -> tuple[str, str, str, str, str, str]:
     if provider.id == "custom":
         base_url = _prompt_text("   Base URL (e.g. http://localhost:1234/v1)")
         model = _prompt_text("   Model name")
+    # Self-hosted endpoints (OmniRoute, Ollama, LM Studio) come with a working
+    # default; tell the owner how to move them instead of prompting for it.
+    for env_name in _providers.base_url_env_names(provider.id):
+        print(f"   Endpoint: {provider.base_url}  "
+              f"(override with {env_name} in .env if it runs elsewhere)")
     if provider.key_required:
         hint = f" (get one at {provider.key_url})" if provider.key_url else ""
         print(f"   {provider.label}: API key{hint}")
