@@ -240,3 +240,35 @@ def test_local_providers_need_no_key():
         provider = providers.get(provider_id)
         assert provider.key_required is False
         assert provider.base_url.startswith("http://")
+
+# --- OmniRoute (keyless self-hosted gateway) ---------------------------------
+def test_omniroute_provider_screen_shows_its_endpoint(env, make_call):
+    ai_setup.on_callback(make_call(data="ai:provider:omniroute"))
+    assert database.get_str("ai_provider") == "omniroute"
+    text = handlers.bot.edit_message_text.call_args.args[0]
+    assert "OmniRoute" in text
+    assert "http://localhost:20128/v1" in text
+    assert "Send the base URL" not in text
+
+
+def test_omniroute_menu_offers_an_optional_key(env, make_call):
+    ai_setup.on_callback(make_call(data="ai:provider:omniroute"))
+    labels = [b.text for row in handlers.bot.edit_message_text.call_args.kwargs
+              ["reply_markup"].keyboard for b in row]
+    assert any("optional" in label for label in labels)
+    assert "🌐 Set base URL" not in labels
+
+
+def test_ollama_menu_has_no_key_button(env, make_call):
+    ai_setup.on_callback(make_call(data="ai:provider:ollama"))
+    labels = [b.text for row in handlers.bot.edit_message_text.call_args.kwargs
+              ["reply_markup"].keyboard for b in row]
+    assert not any("key" in label.lower() for label in labels)
+
+
+def test_omniroute_works_out_of_the_box(db):
+    """No key anywhere: the provider is ready as soon as it is selected."""
+    assert ai_service.is_ready() is False
+    ai_service.set_provider("omniroute")
+    assert ai_service.is_ready() is True
+    assert ai_service.active_model() == "auto"

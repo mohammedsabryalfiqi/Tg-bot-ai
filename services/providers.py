@@ -11,7 +11,8 @@ Transport kinds
     ``POST {base_url}/chat/completions`` with ``Authorization: Bearer <key>``.
     This one code path covers OpenAI itself, Anthropic-compatible gateways,
     Google Gemini (its OpenAI-compatibility endpoint), Groq, OpenRouter,
-    DeepSeek, Mistral, xAI, Together, Ollama/LM Studio and any custom endpoint.
+    DeepSeek, Mistral, xAI, Together, OmniRoute (a self-hosted multi-provider
+    gateway), Ollama/LM Studio and any custom endpoint.
 ``anthropic``
     Native Messages API (``POST {base_url}/messages``) — used for Anthropic so
     we do not depend on their OpenAI-compatibility shim being enabled.
@@ -150,6 +151,24 @@ PROVIDERS: dict[str, Provider] = {
         key_url="https://api.together.xyz/settings/api-keys",
         docs="API key from api.together.xyz.",
     ),
+    # ------------------------------------------------------------- OmniRoute ---
+    "omniroute": Provider(
+        id="omniroute",
+        label="OmniRoute (self-hosted gateway)",
+        kind="openai_compat",
+        base_url="http://localhost:20128/v1",
+        default_model="auto",
+        models=("auto",),
+        key_required=False,          # /v1 is open by default (REQUIRE_API_KEY=false)
+        local=True,
+        free_tier=True,
+        docs="Self-hosted OpenAI-compatible gateway (github.com/diegosouzapw/"
+             "OmniRoute). No AI key is stored in the bot: OmniRoute holds the "
+             "provider accounts and routes/falls back between them. Run it on the "
+             "bot's machine (default http://localhost:20128/v1), or point the bot "
+             "elsewhere with OMNIROUTE_BASE_URL. If your OmniRoute sets "
+             "REQUIRE_API_KEY=true, send its API key (OMNIROUTE_API_KEY).",
+    ),
     # ---------------------------------------------------------------- Ollama ---
     "ollama": Provider(
         id="ollama",
@@ -205,7 +224,8 @@ PROVIDERS: dict[str, Provider] = {
 # Order used by the picker: practical free/cheap options first, local last.
 PROVIDER_ORDER: tuple[str, ...] = (
     "openai", "google", "groq", "openrouter", "anthropic", "deepseek",
-    "mistral", "xai", "together", "custom", "ollama", "lmstudio", "codex",
+    "mistral", "xai", "together", "omniroute", "custom", "ollama", "lmstudio",
+    "codex",
 )
 
 DEFAULT_PROVIDER = "openai"
@@ -254,8 +274,24 @@ def key_env_var(provider_id: str) -> str:
         "mistral": "MISTRAL_API_KEY",
         "xai": "XAI_API_KEY",
         "together": "TOGETHER_API_KEY",
+        "omniroute": "OMNIROUTE_API_KEY",
         "ollama": "",
         "lmstudio": "",
         "custom": "AI_API_KEY",
         "codex": "",
     }.get(provider_id, "AI_API_KEY")
+
+
+def base_url_env_names(provider_id: str) -> list[str]:
+    """Env vars that may override a built-in ``base_url`` (self-hosted endpoints).
+
+    Public cloud providers are deliberately absent: their base URL is fixed, so a
+    typo in the environment cannot silently redirect traffic somewhere else. Only
+    local/self-hosted endpoints (whose address differs per machine) are
+    overridable — ``custom`` has its own DB-stored URL and is handled separately.
+    """
+    return {
+        "omniroute": ["OMNIROUTE_BASE_URL"],
+        "ollama": ["OLLAMA_BASE_URL"],
+        "lmstudio": ["LMSTUDIO_BASE_URL"],
+    }.get(provider_id, [])

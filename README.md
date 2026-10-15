@@ -111,6 +111,9 @@ Send `/start 7B31F90C` (your code) to the bot in Telegram. It replies
   **OpenRouter** (free models available) — good for testing without a card.
 - 💻 **Ollama** (`http://localhost:11434/v1`) / **LM Studio** — free, local, needs
   a decent machine.
+- 🔀 **OmniRoute** — a self-hosted gateway that keeps *all* the provider accounts
+  on your side, so the bot stores no AI key at all (see
+  [OmniRoute](#omniroute-no-ai-key-inside-the-bot-optional) below).
 - 💳 **OpenAI**, **Anthropic Claude**, **DeepSeek**, **Mistral**, **xAI (Grok)**,
   **Together**, or **custom** for any OpenAI-compatible gateway.
 
@@ -254,6 +257,7 @@ you never send a reply to a message that no longer exists.
 | `mistral` | Mistral AI | yes | — |
 | `xai` | xAI (Grok) | yes | — |
 | `together` | Together AI | yes | — |
+| `omniroute` | OmniRoute (self-hosted gateway) | optional | — |
 | `custom` | Any OpenAI-compatible endpoint | optional | maybe |
 | `ollama` | Ollama (local, free) | no | ✅ `nomic-embed-text` |
 | `lmstudio` | LM Studio (local, free) | no | — |
@@ -275,6 +279,57 @@ embeddings are unavailable (keyword search is used instead). The mechanism is
 legitimate, but automating a personal subscription for a customer-facing service is
 a usage-policy gray area — review OpenAI's terms.
 
+### OmniRoute: no AI key inside the bot (optional)
+
+[OmniRoute](https://github.com/diegosouzapw/OmniRoute) is a self-hosted
+OpenAI-compatible gateway: it exposes one endpoint (`/v1`) and routes/falls back
+across hundreds of providers. The bot ships it as a first-class provider, so the
+bot itself holds **no AI key** — the accounts live in OmniRoute.
+
+Be clear about what this does and does not do: OmniRoute is a router, not a free
+AI supply. You still connect **at least one** provider account or key inside it
+(a free tier such as Google Gemini, Groq or OpenRouter, or your ChatGPT/Claude
+account). Keyless providers exist (e.g. Pollinations) but are rate-limited and
+explicitly not guaranteed — fine for testing, not for customers. The win is that
+one account/key at OmniRoute serves the bot, with automatic fallback.
+
+**1) Run OmniRoute** (Node 22.22+ / 24+, or Bun) on the bot's machine:
+```bash
+npm install -g omniroute
+omniroute                    # dashboard: http://localhost:20128
+```
+or with Docker:
+```bash
+docker run -d --name omniroute --restart unless-stopped --stop-timeout 40 \
+  -p 127.0.0.1:20128:20128 -v omniroute-data:/app/data diegosouzapw/omniroute:latest
+```
+> Keep it bound to `127.0.0.1` unless you set `REQUIRE_API_KEY=true` in OmniRoute.
+
+**2) Connect one provider** in its dashboard → **Providers** (the **Free Tiers**
+panel lists what is currently free).
+
+**3) Point the bot at it**: `/ai` → **OmniRoute (self-hosted gateway)** → no key
+needed → **Test connection**. The default model is `auto`; type any concrete model
+name (e.g. `gemini-2.5-flash`) with "✏️ Type another model name" if you prefer to
+pin one.
+
+**4) Not on the same host?** Set in `.env`:
+```env
+AI_PROVIDER=omniroute
+OMNIROUTE_BASE_URL=http://host.docker.internal:20128/v1   # bot in Docker, OmniRoute on the host
+```
+If your OmniRoute sets `REQUIRE_API_KEY=true`, add its key as `OMNIROUTE_API_KEY=`
+(or send it from `/ai` → "Send API key (optional)").
+
+Notes:
+- Knowledge-base retrieval uses keyword search on this provider (embeddings depend
+  on whichever provider you connected inside OmniRoute). Add an OpenAI key to the
+  bot if you want vector search too.
+- A generic "sorry, I could not answer" reply means every route inside OmniRoute
+  failed — check its **Logs/Analytics** for a healthy connection, then `/aitest`.
+- `docker-compose.yml` already maps `host.docker.internal` to the host gateway, so
+  the Docker case above works out of the box.
+
 ---
 
 ## Configuration (.env)
@@ -287,11 +342,14 @@ OWNER_USER_ID=                     # optional; empty ⇒ use the printed claim c
 ALLOW_OWNER_CLAIM=true             # set false to forbid claiming
 
 AI_PROVIDER=openai                 # openai|anthropic|google|groq|openrouter|
-                                   # deepseek|mistral|xai|together|custom|
-                                   # ollama|lmstudio|codex
+                                   # deepseek|mistral|xai|together|omniroute|
+                                   # custom|ollama|lmstudio|codex
 AI_API_KEY=                        # or OPENAI_API_KEY / ANTHROPIC_API_KEY / …
+                                   # (not needed for omniroute/ollama/lmstudio/codex)
 AI_MODEL=                          # empty ⇒ the provider's default model
 AI_BASE_URL=                       # required for `custom`, useful for local models
+OMNIROUTE_BASE_URL=                # optional: OmniRoute address if not localhost:20128
+OMNIROUTE_API_KEY=                 # optional: only if OmniRoute requires a key
 
 SMARTEL_FERNET_KEY=                # encrypts stored API keys (optional, recommended)
 DEFAULT_MODEL=gpt-4.1-mini         # seeds the settings table on first run
@@ -358,6 +416,7 @@ sudo systemctl enable --now smartel && journalctl -u smartel -f
 | No customer messages arrive | Business Mode off in BotFather, bot not connected under **Telegram Business → Chat Bots**, or the account is not Premium. |
 | The bot reads but never replies | Enable **"Allow bot to reply to messages"** in the bot's Business permissions; verify with `/status`. |
 | Replies are generic / the bot apologises | Key invalid or out of quota: `/ai` → **Test connection**, or `/health`. |
+| Nothing works with `omniroute` | OmniRoute not running/reachable (`http://localhost:20128`) or no healthy provider connected inside it — check its dashboard, then `/aitest`. Bot in Docker + OmniRoute on the host ⇒ `OMNIROUTE_BASE_URL=http://host.docker.internal:20128/v1`. |
 | Nothing happens in one chat | That chat is paused (earlier takeover or rate limit): `/chats`, `/handback <chat_id>`. |
 | `409 Conflict` in the logs | Another instance is polling with the same token — stop it. |
 | It doesn't know my info | Add content: `/faq_add` for frequent questions, `/kb_upload` for documents; consider `strict_kb_mode`. |

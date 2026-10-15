@@ -76,6 +76,9 @@ python main.py
 - **Groq** — سريع جدًا وبه طبقة مجانية (`console.groq.com`).
 - **OpenRouter** — مفتاح واحد لعشرات الموديلات (فيه موديلات مجانية).
 - **Ollama / LM Studio** — يعمل على جهازك بلا تكلفة (تحتاج جهازًا جيدًا).
+- **OmniRoute** — بوّابة (Gateway) محلية تجمع مئات المزوّدين في نقطة واحدة، فيبقى
+  البوت بلا أي مفتاح ذكاء اصطناعي (التفاصيل في قسم
+  «بدون أي مفاتيح ذكاء اصطناعي داخل البوت» أدناه).
 
 مزودون مدفوعون: **OpenAI**، **Anthropic Claude**، **DeepSeek**، **Mistral**،
 **xAI (Grok)**، **Together**، أو أي خدمة متوافقة مع OpenAI عبر خيار **custom**.
@@ -209,10 +212,12 @@ BOT_TOKEN=123456789:AA...
 OWNER_USER_ID=
 ALLOW_OWNER_CLAIM=true
 
-AI_PROVIDER=openai           # openai|anthropic|google|groq|openrouter|deepseek|mistral|xai|together|custom|ollama|lmstudio|codex
-AI_API_KEY=sk-...
+AI_PROVIDER=openai           # openai|anthropic|google|groq|openrouter|deepseek|mistral|xai|together|omniroute|custom|ollama|lmstudio|codex
+AI_API_KEY=sk-...            # غير مطلوب مع omniroute / ollama / lmstudio / codex
 AI_MODEL=gpt-4.1-mini        # فارغ = الموديل الافتراضي للمزوّد
 AI_BASE_URL=                 # للنماذج المحلية أو خدمة مخصّصة
+OMNIROUTE_BASE_URL=          # اختياري: عنوان OmniRoute إن لم يكن localhost:20128
+OMNIROUTE_API_KEY=           # اختياري: فقط إن كان OmniRoute يطلب مفتاحًا
 
 SMARTEL_FERNET_KEY=          # مفتاح تشفير مفاتيح API المخزّنة (اختياري لكن مستحسن)
 DEFAULT_AUTO_REPLY=false     # القيم الافتراضية عند أول تشغيل فقط
@@ -231,6 +236,59 @@ codex login                  # اختر "Sign in with ChatGPT"
 هذا المسار أبطأ من API، وحدود الاشتراك تنطبق، والبحث بالـ Embeddings غير متاح
 (يعمل البحث بالكلمات المفتاحية تلقائيًا). راجع شروط استخدام OpenAI قبل استخدامه
 لخدمة عملاء حقيقية.
+
+### بدون أي مفاتيح ذكاء اصطناعي داخل البوت: ربط البوت بـ OmniRoute (اختياري)
+
+[OmniRoute](https://github.com/diegosouzapw/OmniRoute) بوّابة (Gateway) مفتوحة
+المصدر تعمل على جهازك، وتُظهر **نقطة واحدة متوافقة مع OpenAI** (`/v1`) ثم توزّع
+الطلب على مئات المزوّدين مع تبديل تلقائي عند الوصول للحدود. البوت يدعمه كمزوّد
+جاهز باسم **OmniRoute** — أي أن البوت نفسه لا يحمل أي مفتاح ذكاء اصطناعي: كل
+المفاتيح والحسابات تبقى داخل OmniRoute.
+
+**قبل أن تبدأ — بصراحة:** OmniRoute ليس مصدرًا مجانيًا للذكاء الاصطناعي بحد ذاته،
+هو منظِّم وموزِّع. لذلك ستحتاج داخله إلى ربط **حساب أو مفتاح واحد على الأقل**
+(طبقة مجانية مثل Google Gemini أو Groq أو OpenRouter، أو حساب ChatGPT/Claude…).
+يوجد مزوّدون «بلا مفتاح» (مثل Pollinations) لكنهم محدودون وغير مضمونين — للاختبار
+فقط. المكسب العملي: **حساب/مفتاح واحد عند OmniRoute، والبوت لا يعرف عنه شيئًا**،
+مع تبديل تلقائي بين المزوّدين وتقليل استهلاك التوكنات.
+
+**1) شغّل OmniRoute** على نفس جهاز البوت:
+```bash
+npm install -g omniroute
+omniroute                    # لوحة التحكم: http://localhost:20128
+```
+أو بـ Docker:
+```bash
+docker run -d --name omniroute --restart unless-stopped --stop-timeout 40 \
+  -p 127.0.0.1:20128:20128 -v omniroute-data:/app/data diegosouzapw/omniroute:latest
+```
+> يحتاج Node ‏22.22+ أو ‏24+ (أو Bun). لا تُوسّع المنفذ إلى `0.0.0.0` قبل ضبط
+> `REQUIRE_API_KEY=true` داخل OmniRoute.
+
+**2) اربط مزوّدًا واحدًا على الأقل**: من لوحة OmniRoute ← **Providers** (طبقة
+مجانية أو مفتاحك)، ولوحة **Free Tiers** تعرض المتاح مجانًا حاليًا.
+
+**3) اربط البوت**: أرسل `/ai` ← اختر **«OmniRoute (self-hosted gateway)»** ←
+لا حاجة لأي مفتاح ← **Test connection**. الموديل الافتراضي `auto`، ويمكنك كتابة
+اسم موديل محدد (مثل `gemini-2.5-flash`) من «✏️ Type another model name».
+
+**4) إن كان OmniRoute على جهاز آخر أو كان البوت في Docker**، اضبط `.env`:
+```env
+AI_PROVIDER=omniroute
+OMNIROUTE_BASE_URL=http://host.docker.internal:20128/v1   # البوت في Docker وOmniRoute على الجهاز
+```
+وإن فعّلت `REQUIRE_API_KEY=true` في OmniRoute فأضف مفتاحه (`OMNIROUTE_API_KEY=...`
+أو من `/ai` ← «Send API key (optional)»).
+
+**ملاحظات مهمة:**
+- قاعدة المعرفة تعمل بالبحث بالكلمات المفتاحية مع هذا المزوّد (الـ Embeddings تعتمد
+  على المزوّد الذي ربطته داخل OmniRoute). يمكنك إضافة مفتاح OpenAI في البوت
+  للـ Embeddings فقط إن أردت بحثًا دلاليًا.
+- إن ردّ البوت باعتذار فهذا يعني أن كل مسارات OmniRoute فشلت: افتح لوحته ←
+  **Logs/Analytics** وتأكد من وجود مزوّد متصل وسليم، ثم `/aitest`.
+- `http://localhost:20128` لا يعمل إن كان البوت وOmniRoute في حاويتين منفصلتين —
+  استخدم `host.docker.internal` (مضبوط مسبقًا في `docker-compose.yml`) أو اسم
+  الخدمة.
 
 ---
 
@@ -276,6 +334,7 @@ sudo systemctl enable --now smartel && journalctl -u smartel -f
 | لا تصلك أي رسالة من العملاء | تأكد من تشغيل **Business Mode** في BotFather، وأن الربط تم من **Telegram Business ← Chat Bots**، وأن حسابك **Premium**. |
 | البوت يقرأ ولا يرد | فعّل **«Allow bot to reply to messages»** في صلاحيات البوت داخل إعدادات Telegram Business، وتأكد بـ `/status`. |
 | يرد بلا ذكاء اصطناعي أو يعتذر | المفتاح غير صالح أو انتهى الرصيد: `/ai` ← **Test connection**، أو `/health`. |
+| لا يعمل مع مزوّد OmniRoute | تأكد أن OmniRoute مفتوح (`http://localhost:20128`) وأن داخله مزوّدًا متصلًا وسليمًا، ثم `/aitest`. وإن كان البوت في Docker بينما OmniRoute على الجهاز: `OMNIROUTE_BASE_URL=http://host.docker.internal:20128/v1`. |
 | لا يرد في محادثة معيّنة | المحادثة موقوفة (تدخّل سابق) — `/chats` ثم إلغاء الإيقاف، أو `/handback <chat_id>`. |
 | «409 Conflict» في السجلات | نسخة أخرى من البوت تعمل بنفس التوكن — أوقفها. |
 | الردود لا تعرف معلوماتك | أضف المحتوى: `/faq_add` للأسئلة المتكررة و`/kb_upload` للملفات، أو ارفع `strict_kb_mode`. |

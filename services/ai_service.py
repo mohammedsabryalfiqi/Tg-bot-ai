@@ -179,7 +179,14 @@ def set_model(model: str, provider_id: str | None = None) -> None:
 
 
 def active_base_url(provider_id: str | None = None) -> str:
-    """Base URL for the active provider (custom/local endpoints are owner-set)."""
+    """Base URL for the active provider.
+
+    ``custom`` reads the owner-stored URL (Telegram / .env). Local self-hosted
+    endpoints (OmniRoute, Ollama, LM Studio) use their registry default but let
+    an environment variable override it, so the same installation can move the
+    gateway to another host/port (or to ``host.docker.internal`` under Docker)
+    without code changes.
+    """
     provider = providers.get_or_default(provider_id or active_provider_id())
     if provider.id == "custom":
         stored = str(_db_setting("ai_base_url", "") or "").strip()
@@ -188,6 +195,10 @@ def active_base_url(provider_id: str | None = None) -> str:
             or (os.environ.get("AI_BASE_URL") or "").strip()
             or (os.environ.get("OPENAI_BASE_URL") or "").strip()  # legacy key
         )
+    for name in providers.base_url_env_names(provider.id):
+        override = (os.environ.get(name) or "").strip()
+        if override:
+            return override
     return provider.base_url
 
 
@@ -679,6 +690,8 @@ def status_lines() -> list[str]:
             lines.append(f"Base URL: {active_base_url() or '(not set)'}")
     else:
         lines.append(f"Endpoint: {active_base_url() or '(not set)'}")
+        if key_source(provider.id) != "none":
+            lines.append(f"API key: {masked_active_key(provider.id)} (optional here)")
     lines.append(f"Embeddings: {'yes' if supports_embeddings() else 'no (keyword search only)'}")
     return lines
 
