@@ -98,3 +98,27 @@ def test_invalid_env_without_a_terminal_exits_cleanly(monkeypatch, capsys, tmp_p
     out = capsys.readouterr().out
     assert "invalid" in out
     assert ".env.example" in out
+
+
+def test_env_vars_without_dotenv_are_used_directly(monkeypatch, tmp_path):
+    # Railway/Render/Fly inject config as env vars and have no .env file. The
+    # wizard must NOT be started in that case (it can never be answered there).
+    monkeypatch.setattr(config, "ENV_PATH", tmp_path / ".env")
+    monkeypatch.setenv("BOT_TOKEN", "123456789:" + "A" * 35)
+    monkeypatch.setenv("ALLOW_OWNER_CLAIM", "true")
+
+    def must_not_run():
+        raise AssertionError("wizard should not run when BOT_TOKEN is in the environment")
+
+    monkeypatch.setattr(config, "run_wizard", must_not_run)
+    cfg = config.load_or_run_wizard()
+    assert cfg.bot_token == "123456789:" + "A" * 35
+
+
+def test_env_vars_with_invalid_token_exit_cleanly(monkeypatch, capsys, tmp_path):
+    monkeypatch.setattr(config, "ENV_PATH", tmp_path / ".env")
+    monkeypatch.setenv("BOT_TOKEN", "not-a-token")
+    with pytest.raises(SystemExit) as exc:
+        config.load_or_run_wizard()
+    assert exc.value.code == 2
+    assert "BOT_TOKEN" in capsys.readouterr().out

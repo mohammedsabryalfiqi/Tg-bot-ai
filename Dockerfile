@@ -21,8 +21,12 @@ COPY . .
 # Runtime data (SQLite DB, uploads) lives in a volume; drop privileges.
 RUN mkdir -p storage/uploads storage/vector_store \
     && useradd --create-home --shell /usr/sbin/nologin smartel \
-    && chown -R smartel:smartel /app
-USER smartel
+    && chown -R smartel:smartel /app \
+    && chmod 0755 /app/docker-entrypoint.sh
+
+# The entrypoint starts as root only to fix ownership of the mounted storage
+# volume (Railway mounts volumes as root), then drops to the `smartel` user.
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
 
 # Persistent data (SQLite DB, uploads) lives in /app/storage. On Railway, attach a
 # Railway Volume mounted at /app/storage (Dockerfile VOLUME is not supported).

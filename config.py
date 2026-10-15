@@ -463,7 +463,22 @@ def _load_config_gracefully() -> Config:
 
 
 def load_or_run_wizard() -> Config:
-    """Load config from .env if present & valid, else run the first-launch wizard."""
+    """Load config from .env if present & valid, else run the first-launch wizard.
+
+    Hosted platforms (Railway, Render, Fly, Docker `-e`, …) inject configuration
+    as real environment variables and usually have no .env file. If BOT_TOKEN is
+    already in the environment, use it directly instead of trying to open an
+    interactive wizard that can never be answered there.
+    """
+    if not env_exists() and (os.environ.get("BOT_TOKEN") or "").strip():
+        cfg = Config.from_env()
+        try:
+            cfg.validate()
+        except ConfigError as e:
+            print(f"\nInvalid configuration in environment variables: {e}")
+            sys.exit(2)
+        return cfg
+
     if env_exists():
         load_env()
         cfg = Config.from_env()
