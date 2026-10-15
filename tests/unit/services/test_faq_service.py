@@ -106,19 +106,43 @@ def test_ascii_trigger_needs_word_boundary(db):
     assert faq.find_best("a cat photo") is not None
 
 
-def test_partial_match_needs_threshold(db):
-    faq.add("delivery, shipping", "3-5 days")
-    match = faq.find_best("how long is delivery?")
+def test_triggers_are_alternatives_so_one_hit_is_direct(db):
+    """A synonym list must not dilute the match: any trigger answers the entry."""
+    faq.add("سعر, بكام, كام, price", "الأسعار تبدأ من 500 جنيه")
+    match = faq.find_best("بكام الكيك؟")
     assert match is not None
-    assert match.matched == 1 and match.total == 2
-    assert match.is_direct() is False          # 50% < 60% default
-    assert faq.resolve("how long is delivery?")[1] is False
+    assert match.total == 4              # four alternative triggers
+    assert match.matched >= 1            # «بكام» hit (Arabic substrings match too)
+    assert match.score == 1.0
+    assert match.is_direct() is True
+    assert faq.resolve("بكام الكيك؟")[1] is True
 
 
-def test_partial_match_can_become_direct_with_a_lower_threshold(db):
-    db.set_setting("faq_match_threshold", 40)
-    faq.add("delivery, shipping", "3-5 days")
-    assert faq.resolve("how long is delivery?")[1] is True
+def test_word_form_hit_is_context_but_not_direct(db):
+    """"do you deliver?" is a word-form hit for «delivery»: prompt context only."""
+    faq.add("delivery", "3-5 days")
+    match = faq.find_best("do you deliver to Aswan?")
+    assert match is not None
+    assert match.score == 0.5
+    assert match.is_direct() is False
+    assert faq.resolve("do you deliver to Aswan?")[1] is False
+
+
+def test_word_form_hit_becomes_direct_when_the_threshold_is_lowered(db):
+    db.set_setting("faq_match_threshold", 50)
+    faq.add("delivery", "3-5 days")
+    assert faq.resolve("do you deliver to Aswan?")[1] is True
+
+
+def test_word_forms_cover_plurals_and_gerunds(db):
+    faq.add("order", "Orders ship in 24h")
+    assert faq.find_best("I have two orders") is not None
+    assert faq.find_best("ordering again") is not None
+
+
+def test_word_forms_do_not_match_unrelated_words(db):
+    faq.add("cancel", "Use /cancel-free support")
+    assert faq.find_best("my cancer screening") is None
 
 
 def test_more_specific_entry_wins(db):

@@ -90,13 +90,43 @@ def build_bot(cfg: config.Config) -> telebot.TeleBot:
     )
 
 
-def validate_bot(bot: telebot.TeleBot) -> dict:
-    try:
-        me = bot.get_me()
-        return {"id": me.id, "username": me.username}
-    except Exception as e:
-        log.error("Could not authenticate with Telegram (check BOT_TOKEN): %s", type(e).__name__)
-        raise SystemExit(2)
+_NETWORK_ERROR_HINTS = ("ssl", "connection", "timed out", "timeout", "resolve",
+                         "proxyerror", "network", "unreachable")
+
+
+def validate_bot(bot: telebot.TeleBot, attempts: int = 2) -> dict:
+    """Authenticate the token, with one retry and a diagnosis that names the
+    actual problem (bad token vs. no network) instead of a bare exception name."""
+    last_error: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            me = bot.get_me()
+            return {"id": me.id, "username": me.username}
+        except Exception as e:
+            last_error = e
+            text = str(e)
+            unauthorized = "unauthorized" in text.lower() or "401" in text
+            if unauthorized:
+                log.error(
+                    "Telegram rejected the BOT_TOKEN (Unauthorized). Copy the token again "
+                    "from @BotFather (/mybots → API Token) or run: python main.py --reset"
+                )
+                raise SystemExit(2)
+            if attempt < attempts:
+                log.warning("Telegram API call failed (%s); retrying in 3s…", type(e).__name__)
+                time.sleep(3)
+
+    text = str(last_error)
+    if any(hint in text.lower() for hint in _NETWORK_ERROR_HINTS):
+        log.error(
+            "Could not reach api.telegram.org (%s). Check the internet connection, "
+            "firewall or proxy — the token was not verified.",
+            type(last_error).__name__,
+        )
+    else:
+        log.error("Could not authenticate with Telegram (check BOT_TOKEN): %s — %s",
+                  type(last_error).__name__, text[:200])
+    raise SystemExit(2)
 
 
 def clear_webhook(bot: telebot.TeleBot) -> None:

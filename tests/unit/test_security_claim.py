@@ -30,7 +30,10 @@ def test_correct_code_claims_ownership(db, stub_bot, make_message):
     assert security.owner_id() == 321
     assert security.is_owner(321) is True
     assert db.get_int("claimed_owner_user_id") == 321
-    assert "now the owner" in stub_bot.send_message.call_args.args[1]
+    texts = [call.args[1] for call in stub_bot.send_message.call_args_list]
+    assert any("now the owner" in text for text in texts)
+    # The claim is followed by the control panel so the owner lands on the UI.
+    assert any("Your Telegram Business assistant" in text for text in texts)
 
 
 def test_claim_code_is_case_insensitive(db, stub_bot, make_message):

@@ -440,6 +440,28 @@ def run_wizard() -> Config:
     return cfg
 
 
+#: Printed when there is no .env and no interactive terminal to ask questions in.
+NO_TERMINAL_HELP = (
+    "\nNo .env file was found and no terminal is available to ask questions.\n"
+    "Create one from the template and fill it in:\n"
+    "    cp .env.example .env      (Windows: copy .env.example .env)\n"
+    "then set BOT_TOKEN (from @BotFather). AI keys can also be added later\n"
+    "from inside Telegram with /ai.\n"
+)
+
+
+def _load_config_gracefully() -> Config:
+    """Run the wizard, but fail with advice instead of a traceback when there is
+    no interactive stdin (docker, systemd, cron, `python main.py < /dev/null`)."""
+    try:
+        return run_wizard()
+    # EOFError: stdin closed (docker/systemd/systemd). OSError: stdin exists but
+    # is not readable (piped-closed, pytest capture). Both mean "no terminal".
+    except (EOFError, OSError, KeyboardInterrupt):
+        print("\n" + NO_TERMINAL_HELP)
+        sys.exit(2)
+
+
 def load_or_run_wizard() -> Config:
     """Load config from .env if present & valid, else run the first-launch wizard."""
     if env_exists():
@@ -450,11 +472,16 @@ def load_or_run_wizard() -> Config:
             return cfg
         except ConfigError as e:
             print(f"\nExisting .env is invalid: {e}")
-            if _prompt_bool("Re-run the configuration wizard?", default=True):
-                return run_wizard()
+            try:
+                rerun = _prompt_bool("Re-run the configuration wizard?", default=True)
+            except (EOFError, OSError, KeyboardInterrupt):
+                print("\n" + NO_TERMINAL_HELP)
+                sys.exit(2)
+            if rerun:
+                return _load_config_gracefully()
             sys.exit(2)
     else:
-        return run_wizard()
+        return _load_config_gracefully()
 
 
 # =============================================================================
@@ -462,6 +489,9 @@ def load_or_run_wizard() -> Config:
 # =============================================================================
 def run_reset_wizard() -> None:
     """Interactive configuration reset. Never invoked from Telegram."""
+    if not sys.stdin or not sys.stdin.isatty():
+        print(NO_TERMINAL_HELP)
+        return
     print("\n" + "=" * 60)
     print(" SmarTel — configuration reset")
     print("=" * 60)

@@ -83,6 +83,11 @@ a managed assistant — it does not chat there.
 ### 2. Install and run
 ```bash
 git clone <your-fork-url> && cd Tg-bot-ai
+./start.sh          # Linux / macOS / WSL  — creates .venv, installs deps, runs
+start.bat           # Windows
+```
+Or do it by hand:
+```bash
 python -m venv .venv && source .venv/bin/activate      # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 python main.py
@@ -131,7 +136,16 @@ The bot messages you as soon as the connection is live.
 ```
 /faq_add سعر, كام, بكام, price :: Our prices start at 500 EGP; delivery is 50 EGP.
 ```
-(one or more keywords separated by commas, then `::`, then the answer.)
+(one or more triggers separated by commas, then `::`, then the answer.)
+
+**How quick answers match** — the triggers in one entry are *alternatives*, not a
+checklist: any one of them is enough. A **direct** hit (the trigger appears in the
+message, word-boundary for English, substring for Arabic — so «السعر» matches
+«سعر») sends your text **verbatim**, with no model involved. A **word-form** hit
+(deliver ↔ delivery, order ↔ orders) is only handed to the model as an
+authoritative answer, so it still sounds natural; lower `faq_match_threshold` to
+50 if you want those to be sent verbatim too. Test any wording with
+`/faq_search` — it says whether a message would get an instant reply.
 
 - Upload longer material with `/kb_upload` (`.txt`/`.md`/`.pdf`/`.docx`) or `/kb_add`.
 - Describe yourself: `/settings` → **Persona & language**.

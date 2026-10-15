@@ -106,13 +106,13 @@ def test_exact_faq_match_short_circuits(db):
     assert short == "Prices start at 500 EGP."
 
 
-def test_partial_multi_trigger_match_is_written_by_the_ai(db):
-    """One of two triggers is not enough to send a canned answer verbatim."""
+def test_synonym_trigger_sends_the_canned_answer_verbatim(db):
+    """Triggers are alternatives: «price» alone answers the «price, سعر» entry."""
     from services import faq_service
     faq_service.add("price, سعر", "Prices start at 500 EGP.")
     messages, short = ps.build_messages("bc1", 5, "what is the price?")
-    assert short is None
-    assert "Prices start at 500 EGP." in messages[0]["content"]
+    assert messages == []
+    assert short == "Prices start at 500 EGP."
 
 
 def test_both_triggers_present_sends_the_canned_answer(db):
@@ -132,10 +132,11 @@ def test_faq_direct_reply_can_be_disabled(db):
     assert "APPROVED ANSWERS" in messages[0]["content"]
 
 
-def test_fuzzy_faq_match_is_given_to_the_model(db):
+def test_word_form_faq_match_is_given_to_the_model(db):
+    """"do you deliver?" is a word-form hit for «delivery»: context, not verbatim."""
     from services import faq_service
     faq_service.add("delivery, shipping", "Delivery takes 3-5 days.")
-    messages, short = ps.build_messages("bc1", 5, "how long is delivery usually please")
+    messages, short = ps.build_messages("bc1", 5, "how long do you deliver usually please")
     assert short is None
     assert "Delivery takes 3-5 days." in messages[0]["content"]
 

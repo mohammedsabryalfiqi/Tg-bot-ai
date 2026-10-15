@@ -13,6 +13,16 @@ Two ways an entry is used (both configurable in /settings → FAQ):
 Matching is language-agnostic and Arabic-aware: diacritics, tatweel, alef/ya/ta
 variants and Arabic-Indic digits are normalised before comparison, so
 «الشحـن» matches «الشحن» and «٥» matches «5».
+
+Trigger phrases inside one entry are **alternatives** ("سعر, بكام, price"), so a
+single hit is enough to use the entry — the phrases are not a checklist. Two
+confidence levels are produced:
+
+* ``1.0`` — the phrase appears in the message (word-boundary for ASCII, substring
+  for Arabic). This is a direct hit: the canned answer may be sent as-is.
+* ``0.5`` — a *word-form* hit, e.g. the trigger «delivery» against «deliver» or
+  «delivers». The answer is good context for the model, but it is not sent
+  verbatim unless the owner lowers ``faq_match_threshold`` to 50.
 """
 
 from __future__ import annotations
@@ -75,6 +85,49 @@ def parse_triggers(keywords: str) -> list[str]:
             seen.add(phrase)
             unique.append(phrase)
     return unique
+
+
+# Common English inflections we strip to compare word forms ("delivery" vs
+# "deliver", "orders" vs "order"). Only used for single-word phrases.
+_INFLECTIONS = ("ies", "ing", "edly", "ed", "es", "s", "ly", "y")
+_MIN_STEM = 4
+
+
+def _word_forms(word: str) -> set[str]:
+    forms = {word}
+    for suffix in _INFLECTIONS:
+        if word.endswith(suffix) and len(word) - len(suffix) >= _MIN_STEM:
+            forms.add(word[: -len(suffix)])
+    return forms
+
+
+def _word_form_match(phrase: str, normalized_text: str) -> bool:
+    """True when a *word-form* of the phrase appears as a word of the message."""
+    if " " in phrase or not phrase.isascii():
+        return False
+    phrase_forms = _word_forms(phrase)
+    for word in normalized_text.split():
+        word_forms = _word_forms(word)
+        if phrase_forms & word_forms:
+            return True
+        # "ship" vs "shipping": allow a short shared prefix (>= 4 chars, no more
+        # than 3 characters of difference) so plural/gerund variants also hit.
+        for a in phrase_forms:
+            for b in word_forms:
+                shorter, longer = (a, b) if len(a) <= len(b) else (b, a)
+                if (len(shorter) >= 4 and longer.startswith(shorter)
+                        and len(longer) - len(shorter) <= 3):
+                    return True
+    return False
+
+
+def _phrase_confidence(phrase: str, normalized_text: str) -> float:
+    """1.0 = direct phrase hit, 0.5 = word-form hit, 0.0 = no hit."""
+    if _phrase_matches(phrase, normalized_text):
+        return 1.0
+    if _word_form_match(phrase, normalized_text):
+        return 0.5
+    return 0.0
 
 
 def _phrase_matches(phrase: str, normalized_text: str) -> bool:
@@ -171,17 +224,21 @@ def _threshold() -> float:
 
 
 class Match:
-    """Result of a FAQ lookup."""
+    """Result of a FAQ lookup.
+
+    ``score`` is the entry's best phrase confidence (see the module docstring),
+    ``matched``/``total`` count how many trigger phrases hit. ``exact`` means
+    *every* phrase hit directly — the entry is unambiguous.
+    """
 
     __slots__ = ("row", "score", "matched", "total", "exact")
 
-    def __init__(self, row, score: float, matched: int, total: int):
+    def __init__(self, row, score: float, matched: int, total: int, direct_hits: int = 0):
         self.row = row
         self.score = score
         self.matched = matched
         self.total = total
-        # "exact" = every trigger phrase of the entry matched.
-        self.exact = matched >= total and total >= 1
+        self.exact = total >= 1 and direct_hits >= total
 
     def is_direct(self, threshold: float | None = None) -> bool:
         """Whether this match is strong enough to answer without the model."""
@@ -198,31 +255,39 @@ class Match:
         return int(self.row["id"])
 
 
+def _score_entry(row, normalized_text: str) -> Match | None:
+    """Score one entry against a normalised message (None when nothing matched)."""
+    phrases = parse_triggers(row["keywords"])
+    if not phrases:
+        return None
+    confidences = [_phrase_confidence(phrase, normalized_text) for phrase in phrases]
+    matched = sum(1 for value in confidences if value > 0)
+    if not matched:
+        return None
+    direct_hits = sum(1 for value in confidences if value >= 1.0)
+    return Match(row, max(confidences), matched, len(phrases), direct_hits)
+
+
 def find_best(text: str, *, threshold: float | None = None) -> Match | None:
     """Best matching entry for ``text``, or None.
 
-    An entry qualifies when at least ``MIN_CONTEXT_SCORE`` of its trigger phrases
-    match (or it only has one phrase). ``threshold`` (0-1) is the stricter bar
-    used to decide whether the answer may be sent *without* the model.
+    Entries rank by phrase confidence (a direct hit beats a word-form hit), then
+    by how many of their trigger phrases matched. ``threshold`` (0-1) is the bar
+    used to decide whether the answer may be sent *without* the model — see
+    :meth:`Match.is_direct`.
     """
     normalized = normalize(text)
     if not normalized:
         return None
-    if threshold is None:
-        threshold = _threshold()
     best: Match | None = None
     for row in database.list_faq_entries(only_enabled=True):
-        phrases = parse_triggers(row["keywords"])
-        if not phrases:
+        candidate = _score_entry(row, normalized)
+        if candidate is None or candidate.score < MIN_CONTEXT_SCORE:
             continue
-        matched = sum(1 for phrase in phrases if _phrase_matches(phrase, normalized))
-        if not matched:
-            continue
-        score = matched / len(phrases)
-        if score < MIN_CONTEXT_SCORE and len(phrases) > 1:
-            continue
-        candidate = Match(row, score, matched, len(phrases))
-        if best is None or (candidate.score, candidate.total) > (best.score, best.total):
+        # Highest confidence first, then the entry that matched more phrases
+        # (more specific answers win), then the longer trigger list.
+        if best is None or (candidate.score, candidate.matched, candidate.total) > \
+                (best.score, best.matched, best.total):
             best = candidate
     return best
 
@@ -234,16 +299,11 @@ def search(text: str, limit: int = 5, min_score: float = MIN_CONTEXT_SCORE) -> l
     if not normalized:
         return results
     for row in database.list_faq_entries(only_enabled=True):
-        phrases = parse_triggers(row["keywords"])
-        if not phrases:
+        candidate = _score_entry(row, normalized)
+        if candidate is None or candidate.score < min_score:
             continue
-        matched = sum(1 for phrase in phrases if _phrase_matches(phrase, normalized))
-        if matched:
-            score = matched / len(phrases)
-            if score < min_score and len(phrases) > 1 and min_score > 0:
-                continue
-            results.append(Match(row, score, matched, len(phrases)))
-    results.sort(key=lambda m: (m.score, m.total), reverse=True)
+        results.append(candidate)
+    results.sort(key=lambda m: (m.score, m.matched, m.total), reverse=True)
     return results[:limit]
 
 

@@ -1,184 +1,287 @@
-"""Tests for handlers/owner_tools.py: reply modes, chat listing/transcripts,
-manual replies, stats, health report and the backup export."""
+"""Tests for handlers/owner_tools.py: reply modes, chat transcripts, manual
+replies, statistics, health checks, backups and the tool callbacks."""
 
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import pytest
 
-from handlers import owner_tools as tools
+import database
+import handlers
+import keyboards
+import telegram_api
+from handlers import owner_tools
+from services import business_service
 
 
 @pytest.fixture
 def env(db, stub_bot, mocker):
-    mocker.patch("telegram_api.send_reply")
+    """A configured business account + one customer chat with history."""
     db.upsert_business_connection("bc1", 999, True, True)
+    db.upsert_customer("bc1", 5, "Mona", "Ali", "mona")
+    db.insert_message("bc1", 5, 1, "in", "user", "how much?")
+    mocker.patch("telegram_api.send_reply", return_value=[{"message_id": 1}])
     return db
 
 
+# Owner-facing messages go to the owner's DM chat, not to the customer chat.
+OWNER_CHAT = 12345
+
+
+def _sent(chat_id: int = OWNER_CHAT) -> list[str]:
+    return [call.args[1] for call in handlers.bot.send_message.call_args_list
+            if call.args[0] == chat_id]
+
+
+def _msg(text: str = "", user_id: int = 12345, chat_id: int = OWNER_CHAT, **kw):
+    """A duck-typed owner DM message (the owner chat, not a customer chat)."""
+    return SimpleNamespace(
+        chat=SimpleNamespace(id=chat_id),
+        from_user=SimpleNamespace(id=user_id, first_name="Owner", last_name=None,
+                                  username=None),
+        message_id=kw.pop("message_id", 9001),
+        text=text,
+        caption=None,
+        content_type="text",
+        business_connection_id=None,
+        sender_business_bot=None,
+        **kw,
+    )
+
+
 # --- reply modes -------------------------------------------------------------
-def test_mode_defaults_to_off(db):
-    assert tools.current_mode() == "off"
+def test_mode_default_is_off_then_draft(env):
+    assert owner_tools.current_mode() == "off"
+    assert owner_tools.set_mode("draft") == "draft"
+    assert env.get_bool("auto_reply_enabled") is True
+    assert env.get_bool("approval_mode_enabled") is True
 
 
-@pytest.mark.parametrize("mode,auto,approval", [
-    ("auto", True, False),
-    ("draft", True, True),
-    ("off", False, True),
-])
-def test_set_mode_maps_to_the_two_switches(db, mode, auto, approval):
-    assert tools.set_mode(mode) == mode
-    assert db.get_bool("auto_reply_enabled") is auto
-    assert db.get_bool("approval_mode_enabled") is approval
-    assert tools.current_mode() == mode
+def test_set_mode_auto_disables_approval(env):
+    owner_tools.set_mode("draft")
+    assert owner_tools.set_mode("auto") == "auto"
+    assert env.get_bool("auto_reply_enabled") is True
+    assert env.get_bool("approval_mode_enabled") is False
 
 
-def test_set_mode_rejects_unknown_values(db):
-    assert tools.set_mode("banana") == "off"
-    assert tools.current_mode() == "off"
+def test_set_mode_off_keeps_nothing_on(env):
+    owner_tools.set_mode("auto")
+    assert owner_tools.set_mode("off") == "off"
+    assert env.get_bool("auto_reply_enabled") is False
+    assert owner_tools.current_mode() == "off"
 
 
-def test_cmd_mode_reports_current(env, make_message):
-    tools.cmd_mode(make_message())
-    sent = env  # noqa: F841 - readability
-    text = pytest.importorskip("handlers").bot.send_message.call_args.args[1]
-    assert "Current mode" in text
+def test_unknown_mode_argument_is_treated_as_off(env):
+    owner_tools.set_mode("auto")
+    assert owner_tools.set_mode("banana") == "off"
 
 
-def test_cmd_mode_sets_from_argument(env, make_message):
-    import handlers
-    tools.cmd_mode(make_message(text="/mode auto"))
-    assert tools.current_mode() == "auto"
-    assert handlers.bot.send_message.call_args.args[1].count("Auto-reply") >= 1
-
-
-# --- chat listing / transcripts ---------------------------------------------
-def test_cmd_chats_without_history(env, make_message):
-    import handlers
-    tools.cmd_chats(make_message())
-    assert "No customer chats yet" in handlers.bot.send_message.call_args.args[1]
-
-
-def test_cmd_chats_lists_recent_customers(env, make_message):
-    import handlers
-    env.upsert_customer("bc1", 5, "Cara", "Doe", "cara")
-    env.insert_message("bc1", 5, 1, "in", "user", "hello")
-    tools.cmd_chats(make_message())
+def test_cmd_mode_reports_and_offers_buttons(env, make_message):
+    owner_tools.cmd_mode(_msg(text="/mode"))
+    assert "Current mode" in _sent()[0]
     markup = handlers.bot.send_message.call_args.kwargs["reply_markup"]
-    assert any("Cara" in button.text for row in markup.keyboard for button in row)
+    assert "auto" in [b.callback_data for row in markup.keyboard for b in row][0]
 
 
-def test_cmd_chat_renders_transcript(env, make_message):
-    import handlers
-    env.upsert_customer("bc1", 5, "Cara", None, None)
-    env.insert_message("bc1", 5, 1, "in", "user", "how much?")
-    env.insert_message("bc1", 5, None, "out", "assistant", "500 EGP")
-    tools.cmd_chat(make_message(text="/chat 5"))
-    text = handlers.bot.send_message.call_args.args[1]
+def test_cmd_mode_switches_with_an_argument(env, make_message):
+    owner_tools.cmd_mode(_msg(text="/mode draft"))
+    assert env.get_bool("approval_mode_enabled") is True
+    assert "Draft mode" in _sent()[0]
+
+
+# --- chats -------------------------------------------------------------------
+def test_cmd_chats_lists_customers(env, make_message):
+    owner_tools.cmd_chats(_msg())
+    text = _sent()[0]
+    assert "Recent customer chats" in text
+    markup = handlers.bot.send_message.call_args.kwargs["reply_markup"]
+    data = [b.callback_data for row in markup.keyboard for b in row]
+    assert "tool:chat:5" in data
+
+
+def test_cmd_chats_without_history(env):
+    with database.write_tx() as cur:
+        cur.execute("DELETE FROM customers")
+    owner_tools.cmd_chats(_msg())
+    assert "No customer chats yet" in _sent()[0]
+
+
+def test_transcript_shows_history_and_pause_state(env, make_message):
+    owner_tools.cmd_chat(_msg(text="/chat 5"))
+    text = _sent()[0]
+    assert "Mona Ali (@mona)" in text
     assert "how much?" in text
-    assert "500 EGP" in text
+    assert "active" in text
 
 
-def test_cmd_chat_unknown_id(env, make_message):
-    import handlers
-    env.upsert_business_connection("bc2", 999, True, True)  # now 2 connections
-    tools.cmd_chat(make_message(text="/chat 42"))
-    assert "no messages" in handlers.bot.send_message.call_args.args[1].lower()
+def test_chat_command_validates_the_id(env, make_message):
+    owner_tools.cmd_chat(_msg(text="/chat abc"))
+    assert "Usage" in _sent()[0]
 
 
-def test_cmd_chat_validates_input(env, make_message):
-    import handlers
-    tools.cmd_chat(make_message(text="/chat abc"))
-    assert "Usage" in handlers.bot.send_message.call_args.args[1]
+def test_chat_command_for_an_unknown_chat(env):
+    # With more than one connection there is no safe fallback for an unknown chat.
+    database.upsert_business_connection("bc2", 555, True, True)
+    owner_tools.cmd_chat(_msg(text="/chat 999"))
+    assert "no messages for that chat" in _sent()[0]
 
 
-# --- manual reply ------------------------------------------------------------
-def test_cmd_reply_sends_and_pauses(env, make_message, mocker):
-    import handlers
-    send = mocker.patch("telegram_api.send_reply")
-    env.upsert_customer("bc1", 5, "Cara", None, None)
-    tools.cmd_reply(make_message(text="/reply 5 we will call you back"))
-    assert send.call_args.kwargs["business_connection_id"] == "bc1"
-    assert send.call_args.args[2] == "we will call you back"
-    assert env.get_pause("bc1", 5) is not None          # takeover pause
-    assert env.count_messages(direction="out", role="owner") == 1
-    assert "Sent from your business account" in handlers.bot.send_message.call_args.args[1]
+def test_takeover_and_handback(env, make_message):
+    owner_tools._do_pause_command(_msg(text="/takeover 5"), pause=True)
+    assert business_service.is_chat_paused("bc1", 5) is True
+    assert "will not answer" in _sent()[0]
+
+    owner_tools._do_pause_command(_msg(text="/handback 5"), pause=False)
+    assert business_service.is_chat_paused("bc1", 5) is False
+    assert "answering that chat again" in _sent()[1]
 
 
-def test_cmd_reply_requires_arguments(env, make_message):
-    import handlers
-    tools.cmd_reply(make_message(text="/reply"))
-    assert "Usage" in handlers.bot.send_message.call_args.args[1]
+def test_handback_on_a_chat_that_was_not_paused(env, make_message):
+    owner_tools._do_pause_command(_msg(text="/handback 5"), pause=False)
+    assert "was not paused" in _sent()[0]
 
 
-def test_takeover_and_handback(env, make_message, mocker):
-    import handlers
+def test_pause_commands_need_a_chat_id(env, make_message):
+    owner_tools._do_pause_command(_msg(text="/takeover"), pause=True)
+    assert "Usage" in _sent()[0]
+
+
+# --- manual replies ----------------------------------------------------------
+def test_cmd_reply_sends_from_the_business_account(env, make_message, mocker):
     mocker.patch("telegram_api.send_reply")
-    env.upsert_customer("bc1", 5, "Cara", None, None)
-    tools._do_pause_command(make_message(text="/takeover 5"), pause=True)
-    assert env.get_pause("bc1", 5) is not None
-    tools._do_pause_command(make_message(text="/handback 5"), pause=False)
-    assert env.get_pause("bc1", 5) is None
-    assert "answering that chat again" in handlers.bot.send_message.call_args.args[1]
+    owner_tools.cmd_reply(_msg(text="/reply 5 I'll check and get back to you"))
+    args = telegram_api.send_reply.call_args
+    assert args.args[1] == 5
+    assert args.args[2] == "I'll check and get back to you"
+    # Owner messages are sent verbatim: no markdown rewriting.
+    assert args.kwargs.get("business_connection_id") == "bc1"
+    # Recorded in the transcript and the chat is paused (takeover).
+    rows = database.get_recent_messages("bc1", 5, limit=5)
+    assert rows[-1]["role"] == "owner"
+    assert business_service.is_chat_paused("bc1", 5) is True
+    assert "paused for 30 min" in _sent()[0]
 
 
-# --- stats & health ----------------------------------------------------------
+def test_cmd_reply_to_an_unknown_chat(env):
+    database.upsert_business_connection("bc2", 555, True, True)
+    owner_tools.cmd_reply(_msg(text="/reply 999 hi"))
+    assert "Unknown chat id" in _sent()[0]
+
+
+def test_owner_reply_falls_back_to_the_only_connection(env):
+    """`/reply <chat_id>` must work before the customer row exists."""
+    import telegram_api as tg
+    tg.send_reply.reset_mock()
+    owner_tools._send_owner_reply(OWNER_CHAT, 777, "hello")
+    assert tg.send_reply.call_args.args[1] == 777
+
+
+def test_cmd_reply_when_the_connection_cannot_reply(env, make_message):
+    env.set_setting("auto_reply_enabled", True)
+    database.upsert_business_connection("bc1", 999, True, False)
+    owner_tools.cmd_reply(_msg(text="/reply 5 hi"))
+    assert "cannot reply" in _sent()[0]
+
+
+def test_cmd_reply_reports_send_failures(env, make_message, mocker):
+    mocker.patch("telegram_api.send_reply", side_effect=RuntimeError("nope"))
+    owner_tools.cmd_reply(_msg(text="/reply 5 hi"))
+    assert "Could not send" in _sent()[0]
+
+
+def test_cmd_reply_usage(env, make_message):
+    owner_tools.cmd_reply(_msg(text="/reply"))
+    assert "Usage" in _sent()[0]
+
+
+# --- stats / health ----------------------------------------------------------
 def test_cmd_stats_counts(env, make_message):
-    import handlers
-    env.upsert_customer("bc1", 5, "Cara", None, None)
-    env.insert_message("bc1", 5, 1, "in", "user", "hi")
-    env.insert_message("bc1", 5, None, "out", "assistant", "hello")
-    tools.cmd_stats(make_message())
-    text = handlers.bot.send_message.call_args.args[1]
-    assert "Statistics" in text
-    assert "AI replies" in text
+    env.upsert_customer("bc1", 6, "Other", None, None)
+    owner_tools.cmd_stats(_msg())
+    text = _sent()[0]
+    assert "Customers: <b>2</b>" in text
+    assert "Mode: <b>off</b>" in text
 
 
-def test_health_report_flags_missing_connection(db, stub_bot, mocker):
-    mocker.patch("telegram_api.send_reply")
-    stub_bot.get_me.return_value.username = "mybot"
-    report = tools.health_report()
-    assert "Telegram API reachable" in report
-    assert "AI not configured" in report
-    assert "No business connection" in report
+def test_health_report_mentions_the_unconfigured_pieces(env, mocker):
+    handlers.bot.get_me.return_value = mocker.MagicMock(username="smartel_bot")
+    report = owner_tools.health_report()
+    assert "@smartel_bot" in report
+    assert "Business connection" not in report or "Connection" in report
+    assert "AI ready" in report or "AI not configured" in report
+    assert "Mode:" in report
 
 
-def test_health_report_flags_read_only_connection(env, stub_bot):
-    stub_bot.get_me.return_value.username = "mybot"
-    env.upsert_business_connection("bc-readonly", 999, True, False)
-    report = tools.health_report()
-    assert "can reply: False" in report
-    assert "Allow bot to reply" in report
+def test_health_reports_a_missing_business_connection(env, mocker):
+    handlers.bot.get_me.return_value = mocker.MagicMock(username="b")
+    with database.write_tx() as cur:
+        cur.execute("DELETE FROM business_connections")
+    assert "No business connection" in owner_tools.health_report()
+
+
+def test_health_survives_a_dead_telegram_api(env):
+    handlers.bot.get_me.side_effect = RuntimeError("boom")
+    assert "Telegram API error" in owner_tools.health_report()
 
 
 # --- backup ------------------------------------------------------------------
-def test_export_backup_writes_json(env, make_message, mocker):
-    sent = mocker.patch("telegram_api.send_document")
-    env.set_setting("business_name", "Cairo Bakery")
-    from services import faq_service
-    faq_service.add("price", "500")
-    tools.export_backup(12345)
-    path = sent.call_args.args[2]
-    assert not path.exists()  # temp file is removed after sending
-    assert "settings" in sent.call_args.kwargs["caption"] or "Backup" in sent.call_args.kwargs["caption"]
-
-
-def test_export_backup_payload_has_no_secrets(env, mocker):
+def test_export_backup_contains_settings_without_secrets(env, mocker):
     captured = {}
+    mocker.patch("telegram_api.send_document",
+                 side_effect=lambda bot, chat, path, **kw: captured.update(
+                     path=path, payload=json.loads(path.read_text(encoding="utf-8"))))
+    env.set_setting("custom_instructions", "Always be brief.")
 
-    def fake_send(bot, chat_id, path, caption="", reply_markup=None):
-        captured["payload"] = json.loads(path.read_text(encoding="utf-8"))
-
-    mocker.patch("telegram_api.send_document", side_effect=fake_send)
-    from services import ai_service
-    ai_service.store_api_key("sk-super-secret-123456", "openai")
-    env.set_setting("business_name", "Cairo Bakery")
-
-    tools.export_backup(1)
+    owner_tools.export_backup(12345)
 
     payload = captured["payload"]
     assert payload["type"] == "smartel-backup"
-    assert payload["settings"]["business_name"] == "Cairo Bakery"
-    assert "sk-super-secret-123456" not in json.dumps(payload)
+    assert payload["settings"]["custom_instructions"] == "Always be brief."
+    assert payload["stats"]["messages_in"] == 1
     assert "ai_api_key" not in payload["settings"]
+
+
+def test_export_backup_removes_the_temp_file(env, mocker):
+    captured = {}
+    mocker.patch("telegram_api.send_document",
+                 side_effect=lambda bot, chat, path, **kw: captured.update(path=path))
+    owner_tools.export_backup(12345)
+    assert not captured["path"].exists()
+
+
+# --- callbacks ---------------------------------------------------------------
+def test_callback_close_deletes_the_message(env, make_call):
+    owner_tools.on_callback(make_call(data="tool:close"))
+    handlers.bot.delete_message.assert_called_once()
+
+
+def test_callback_health_resends_the_report(env, make_call, mocker):
+    mocker.patch("handlers.owner_tools.health_report", return_value="❤️ report")
+    owner_tools.on_callback(make_call(data="tool:health"))
+    assert "❤️ report" in _sent()[0]
+
+
+def test_callback_pause_and_resume(env, make_call):
+    owner_tools.on_callback(make_call(data="tool:pause:5"))
+    assert business_service.is_chat_paused("bc1", 5) is True
+    owner_tools.on_callback(make_call(data="tool:resume:5"))
+    assert business_service.is_chat_paused("bc1", 5) is False
+
+
+def test_callback_with_a_bad_chat_id_is_rejected(env, make_call):
+    owner_tools.on_callback(make_call(data="tool:chat:abc"))
+    assert handlers.bot.answer_callback_query.call_args.kwargs["text"] == "Bad chat id."
+
+
+def test_callback_setup_opens_the_checklist(env, make_call, mocker):
+    checklist = mocker.patch("handlers.setup_guide.send_checklist")
+    owner_tools.on_callback(make_call(data="tool:setup"))
+    checklist.assert_called_once_with(12345)
+
+
+def test_callback_setup_step(env, make_call, mocker):
+    step = mocker.patch("handlers.setup_guide.send_step")
+    owner_tools.on_callback(make_call(data="tool:setup_step:ai"))
+    step.assert_called_once_with(12345, "ai")

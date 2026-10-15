@@ -184,6 +184,12 @@ def handle_claim(message) -> None:
         )
     except Exception:
         log.debug("could not send the claim confirmation", exc_info=True)
+    # Follow up with the control panel so the owner lands on the UI immediately.
+    try:
+        from handlers import owner_commands
+        owner_commands.cmd_start(message)
+    except Exception:
+        log.debug("could not send the control panel after claiming", exc_info=True)
 
 
 # =============================================================================

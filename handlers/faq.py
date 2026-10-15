@@ -170,7 +170,12 @@ def _do_search(chat_id: int, query: str) -> None:
         )
     lines = [f"🔍 Matches for “{utils.escape(query)}”:"]
     for match in matches:
-        mode = "instant reply" if match.exact else f"context for the AI ({match.score:.0%})"
+        if match.is_direct():
+            mode = "instant reply ✅"
+        elif match.exact:
+            mode = "context for the AI (all triggers hit)"
+        else:
+            mode = f"context for the AI ({match.score:.0%} confidence)"
         lines.append("")
         lines.append(f"{faq_service.format_entry(match.row)}\n   ↳ {mode}")
     handlers.bot.send_message(chat_id, "\n".join(lines), parse_mode="HTML")

@@ -91,7 +91,9 @@ SETTINGS = [
     {"key": "faq_direct_reply", "group": "ground", "label": "Exact match sends as-is",
      "type": "bool"},
     {"key": "faq_match_threshold", "group": "ground", "label": "FAQ match strictness (%)",
-     "type": "int", "min": 10, "max": 100},
+     "type": "int", "min": 10, "max": 100,
+     "hint": "Any exact trigger = 100%. Word-form hits (deliver ↔ delivery) count as "
+             "50%, so they only reply verbatim if you lower this."},
     {"key": "kb_enabled", "group": "ground", "label": "Knowledge base", "type": "bool"},
     {"key": "strict_kb_mode", "group": "ground", "label": "Strict KB mode", "type": "bool"},
 ]
