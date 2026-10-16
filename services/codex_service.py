@@ -21,6 +21,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+import i18n
 from services.ai_service import AIServiceError as OpenAIServiceError
 
 log = logging.getLogger("smartel.codex")
@@ -35,10 +36,12 @@ _DEFAULT_EXEC_FLAGS = ["--skip-git-repo-check", "--sandbox", "read-only"]
 _MINIMAL_EXEC_FLAGS = ["--skip-git-repo-check"]
 
 CODEX_INSTRUCTION = (
-    "You are a customer-service assistant replying on behalf of a business on "
-    "Telegram. Using the conversation below, write ONLY the single reply message "
-    "to send to the customer's latest message. Do not include any preamble, "
-    "reasoning, code, file edits, or tool output — output just the reply text."
+    "You are the assistant that writes the replies sent from a Telegram account "
+    "(a business account, or someone's own private chat). Using the conversation "
+    "below, write ONLY the single reply message to send to the latest incoming "
+    "message, in the same language that message was written in. Do not include any "
+    "preamble, reasoning, code, file edits, or tool output — output just the reply "
+    "text."
 )
 
 
@@ -141,9 +144,10 @@ def chat(messages: list[dict], *, model: str | None = None) -> str:
     """Generate a reply via `codex exec`. Raises OpenAIServiceError on failure
     (same type the pipeline already handles)."""
     if not is_available():
-        raise OpenAIServiceError(
-            "Codex CLI not found. Install it (npm i -g @openai/codex) and run "
-            "`codex login`.", kind="unknown")
+        raise OpenAIServiceError(i18n.t(
+            "codex.err.not_installed",
+            default="Codex CLI not found. Install it (npm i -g @openai/codex) and "
+                    "run `codex login`."), kind="unknown")
 
     prompt = _build_prompt(messages)
     model = (model or os.environ.get("CODEX_MODEL") or "").strip() or None
@@ -165,16 +169,22 @@ def chat(messages: list[dict], *, model: str | None = None) -> str:
     if rc != 0:
         log.error("codex exec failed (exit %s): %s", rc, (stderr or "").strip()[:500])
         if _is_arg_error(stderr):
-            raise OpenAIServiceError(
-                "Codex rejected the exec flags for your CLI version. Set CODEX_EXEC_ARGS "
-                "in .env to flags your `codex exec` accepts (or leave it blank).",
+            raise OpenAIServiceError(i18n.t(
+                "codex.err.bad_flags",
+                default="Codex rejected the exec flags for your CLI version. Set "
+                        "CODEX_EXEC_ARGS in .env to flags your `codex exec` accepts "
+                        "(or leave it blank)."),
                 kind="bad_request")
         if _looks_like_auth_error(stderr):
-            raise OpenAIServiceError(
-                "Codex isn't logged in — run `codex login` (Sign in with ChatGPT).",
-                kind="auth")
-        raise OpenAIServiceError("Codex failed to generate a reply. See logs.", kind="unknown")
-    raise OpenAIServiceError("Codex returned an empty reply.", kind="unknown")
+            raise OpenAIServiceError(i18n.t(
+                "codex.err.not_logged_in",
+                default="Codex isn't logged in — run `codex login` "
+                        "(Sign in with ChatGPT)."), kind="auth")
+        raise OpenAIServiceError(i18n.t("codex.err.failed",
+                                        default="Codex failed to generate a reply. See logs."),
+                                 kind="unknown")
+    raise OpenAIServiceError(i18n.t("codex.err.empty",
+                                    default="Codex returned an empty reply."), kind="unknown")
 
 
 def _run_exec(prompt: str, model: str | None, flags: list[str], timeout: int):

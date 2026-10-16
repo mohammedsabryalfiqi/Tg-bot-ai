@@ -44,14 +44,25 @@ _MANAGED_ENV_VARS = [
     "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "GROQ_API_KEY", "OPENROUTER_API_KEY",
     "DEEPSEEK_API_KEY", "MISTRAL_API_KEY", "XAI_API_KEY", "TOGETHER_API_KEY",
     "CEREBRAS_API_KEY", "NVIDIA_API_KEY", "SAMBANOVA_API_KEY", "HF_TOKEN",
+    # interface language: the app ships Arabic by default, but the assertions in
+    # this suite are written against the English catalog, so pin it here.
+    "BOT_LANGUAGE",
 ]
 
 
 @pytest.fixture(autouse=True)
 def clean_env(monkeypatch):
-    """Strip managed env vars so runtime routing is deterministic per test."""
+    """Strip managed env vars so runtime routing is deterministic per test.
+
+    Also pins the interface language to English: ``i18n`` reads ``BOT_LANGUAGE``
+    first, and the assertions in this suite quote the English catalog. Tests that
+    exercise the Arabic default override it explicitly (see tests/unit/test_i18n.py).
+    """
     for name in _MANAGED_ENV_VARS:
         monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("BOT_LANGUAGE", "en")
+    import i18n
+    i18n.invalidate_cache()
     yield
 
 

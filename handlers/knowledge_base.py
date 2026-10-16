@@ -8,6 +8,7 @@ import logging
 
 import database
 import handlers
+import i18n
 import keyboards
 import security
 import telegram_api
@@ -72,12 +73,11 @@ def _safe(fn) -> None:
 # =============================================================================
 def open_menu(message) -> None:
     stats = kb_service.stats()
-    text = (
-        "📚 <b>Knowledge Base</b>\n"
-        f"Items: <b>{stats['items']}</b> · Chunks: <b>{stats['chunks']}</b>\n"
-        f"KB usage: <b>{'ON' if database.get_bool('kb_enabled') else 'OFF'}</b> · "
-        f"Strict mode: <b>{'ON' if database.get_bool('strict_kb_mode') else 'OFF'}</b>"
-    )
+    text = i18n.t("kb.menu.title", items=stats["items"], chunks=stats["chunks"],
+                  usage=i18n.t("set.value.on") if database.get_bool("kb_enabled")
+                  else i18n.t("set.value.off"),
+                  strict=i18n.t("set.value.on") if database.get_bool("strict_kb_mode")
+                  else i18n.t("set.value.off"))
     handlers.bot.send_message(message.chat.id, text, parse_mode="HTML",
                               reply_markup=keyboards.kb_menu())
 
@@ -86,23 +86,20 @@ def cmd_add(message) -> None:
     text = _args(message)
     if not text:
         database.set_owner_pending_input(security.operator_id(), "kb_add", {}, 10)
-        return handlers.notify_owner("Send the text to add to the knowledge base, or /cancel.")
+        return handlers.notify_owner(i18n.t("kb.add.ask"))
     _do_add_text(text)
 
 
 def cmd_upload(message) -> None:
     database.set_owner_pending_input(security.operator_id(), "kb_upload", {}, 10)
-    handlers.notify_owner(
-        "Send a document to add to the knowledge base "
-        "(.txt, .md, .pdf, or .docx), or /cancel."
-    )
+    handlers.notify_owner(i18n.t("kb.upload.ask"))
 
 
 def cmd_search(message) -> None:
     query = _args(message)
     if not query:
         database.set_owner_pending_input(security.operator_id(), "kb_search", {}, 10)
-        return handlers.notify_owner("Send a search query, or /cancel.")
+        return handlers.notify_owner(i18n.t("kb.search.ask"))
     _do_search(message.chat.id, query)
 
 
@@ -111,19 +108,21 @@ def cmd_delete(message) -> None:
     try:
         item_id = int(raw)
     except ValueError:
-        return handlers.bot.send_message(message.chat.id, "Usage: /kb_delete <item_id>")
+        return handlers.bot.send_message(message.chat.id, i18n.t("kb.delete.usage"))
     ok = kb_service.delete_item(item_id)
-    handlers.bot.send_message(message.chat.id,
-                              f"Deleted item #{item_id}." if ok else f"No item #{item_id}.")
+    handlers.bot.send_message(
+        message.chat.id,
+        i18n.t("kb.delete.done", id=item_id) if ok
+        else i18n.t("kb.delete.missing", id=item_id))
 
 
 def cmd_clear(message) -> None:
     stats = kb_service.stats()
     if stats["items"] == 0:
-        return handlers.bot.send_message(message.chat.id, "Knowledge base is already empty.")
+        return handlers.bot.send_message(message.chat.id, i18n.t("kb.clear.empty"))
     handlers.bot.send_message(
         message.chat.id,
-        f"Delete <b>all {stats['items']}</b> KB items and {stats['chunks']} chunks?",
+        i18n.t("kb.clear.ask", items=stats["items"], chunks=stats["chunks"]),
         parse_mode="HTML", reply_markup=keyboards.confirm("kbclear"),
     )
 
@@ -131,9 +130,9 @@ def cmd_clear(message) -> None:
 def send_list(chat_id: int, page: int) -> None:
     items = kb_service.list_items()
     if not items:
-        return handlers.bot.send_message(chat_id, "Knowledge base is empty. Use /kb_add or /kb_upload.")
+        return handlers.bot.send_message(chat_id, i18n.t("kb.list.empty"))
     handlers.bot.send_message(
-        chat_id, "📃 <b>KB items</b> (tap to delete):", parse_mode="HTML",
+        chat_id, i18n.t("kb.list.title"), parse_mode="HTML",
         reply_markup=keyboards.kb_list_keyboard(items, page),
     )
 
@@ -156,18 +155,18 @@ def on_callback(call) -> None:
 
     if action == "add":
         database.set_owner_pending_input(security.operator_id(), "kb_add", {}, 10)
-        handlers.notify_owner("Send the text to add to the knowledge base, or /cancel.")
-        return telegram_api.answer_callback(bot, call.id, "Send text…")
+        handlers.notify_owner(i18n.t("kb.add.ask"))
+        return telegram_api.answer_callback(bot, call.id, i18n.t("kb.cb.send_text"))
 
     if action == "upload":
         database.set_owner_pending_input(security.operator_id(), "kb_upload", {}, 10)
-        handlers.notify_owner("Send a .txt/.md/.pdf/.docx document, or /cancel.")
-        return telegram_api.answer_callback(bot, call.id, "Send a file…")
+        handlers.notify_owner(i18n.t("kb.upload.ask_docs"))
+        return telegram_api.answer_callback(bot, call.id, i18n.t("kb.cb.send_file"))
 
     if action == "search":
         database.set_owner_pending_input(security.operator_id(), "kb_search", {}, 10)
-        handlers.notify_owner("Send a search query, or /cancel.")
-        return telegram_api.answer_callback(bot, call.id, "Send a query…")
+        handlers.notify_owner(i18n.t("kb.search.ask"))
+        return telegram_api.answer_callback(bot, call.id, i18n.t("kb.cb.send_query"))
 
     if action == "list":
         page = int(parts[2]) if len(parts) > 2 else 0
@@ -190,14 +189,15 @@ def on_callback(call) -> None:
                     reply_markup=keyboards.kb_list_keyboard(items, page),
                 )
             else:
-                bot.edit_message_text("Knowledge base is now empty.",
+                bot.edit_message_text(i18n.t("kb.cb.now_empty"),
                                       call.message.chat.id, call.message.message_id)
         except Exception:
             pass
-        return telegram_api.answer_callback(bot, call.id, f"Deleted #{item_id}")
+        return telegram_api.answer_callback(bot, call.id,
+                                            i18n.t("kb.cb.deleted", id=item_id))
 
     if action == "clear":
-        bot.send_message(call.message.chat.id, "Delete the entire knowledge base?",
+        bot.send_message(call.message.chat.id, i18n.t("kb.clear.ask_plain"),
                          reply_markup=keyboards.confirm("kbclear"))
         return telegram_api.answer_callback(bot, call.id)
 
@@ -206,7 +206,7 @@ def on_callback(call) -> None:
             bot.delete_message(call.message.chat.id, call.message.message_id)
         except Exception:
             pass
-        return telegram_api.answer_callback(bot, call.id, "Closed.")
+        return telegram_api.answer_callback(bot, call.id, i18n.t("tool.callback.closed"))
 
     telegram_api.answer_callback(bot, call.id)
 
@@ -219,47 +219,45 @@ def apply_pending(message, kind: str, context: dict) -> None:
     if kind == "kb_add":
         text = (getattr(message, "text", None) or getattr(message, "caption", None) or "").strip()
         if not text:
-            return handlers.notify_owner("Nothing to add (empty message).")
+            return handlers.notify_owner(i18n.t("kb.pending.empty"))
         _do_add_text(text)
     elif kind == "kb_upload":
         _do_upload(message)
     elif kind == "kb_search":
         query = (getattr(message, "text", "") or "").strip()
         if not query:
-            return handlers.notify_owner("Empty query.")
+            return handlers.notify_owner(i18n.t("kb.pending.empty_query"))
         _do_search(message.chat.id, query)
 
 
 def _do_add_text(text: str) -> None:
     title = text.splitlines()[0][:60] if text.strip() else "Note"
     result = kb_service.add_text(title, text)
-    note = "" if result["embedded"] else " (stored for keyword search; embeddings unavailable)"
-    handlers.notify_owner(
-        f"✅ Added KB item #{result['item_id']} — {result['chunk_count']} chunk(s){note}."
-    )
+    note = "" if result["embedded"] else i18n.t("kb.add.note_no_embeddings")
+    handlers.notify_owner(i18n.t(
+        "kb.add.done", id=result["item_id"], count=result["chunk_count"], note=note))
 
 
 def _do_upload(message) -> None:
     doc = getattr(message, "document", None)
     if doc is None:
-        return handlers.notify_owner("Please send a <b>document</b> (.txt/.md/.pdf/.docx).")
+        return handlers.notify_owner(i18n.t("kb.upload.need_document"))
     file_name = getattr(doc, "file_name", "upload")
     try:
         data = telegram_api.download_file_bytes(doc.file_id)
     except Exception as e:
         log.warning("file download failed: %s", type(e).__name__)
-        return handlers.notify_owner("Could not download the file from Telegram. Try again.")
+        return handlers.notify_owner(i18n.t("kb.upload.download_failed"))
     try:
         result = kb_service.add_file(data, file_name)
     except FileServiceError as e:
         return handlers.notify_owner(f"⚠️ {utils.escape(str(e))}")
     except OpenAIServiceError as e:
         return handlers.notify_owner(f"⚠️ {utils.escape(e.owner_message)}")
-    note = "" if result["embedded"] else " (keyword-search only; embeddings unavailable)"
-    handlers.notify_owner(
-        f"✅ Added <b>{utils.escape(file_name)}</b> as item #{result['item_id']} — "
-        f"{result['chunk_count']} chunk(s){note}."
-    )
+    note = "" if result["embedded"] else i18n.t("kb.add.note_no_embeddings")
+    handlers.notify_owner(i18n.t(
+        "kb.upload.done", name=utils.escape(file_name), id=result["item_id"],
+        count=result["chunk_count"], note=note))
 
 
 def _do_search(chat_id: int, query: str) -> None:
@@ -268,8 +266,8 @@ def _do_search(chat_id: int, query: str) -> None:
     except OpenAIServiceError as e:
         return handlers.bot.send_message(chat_id, f"⚠️ {utils.escape(e.owner_message)}")
     if not chunks:
-        return handlers.bot.send_message(chat_id, "No relevant knowledge-base entries found.")
-    lines = [f"🔍 Top {len(chunks)} result(s) for <i>{utils.escape(query[:80])}</i>:"]
+        return handlers.bot.send_message(chat_id, i18n.t("kb.search.none"))
+    lines = [i18n.t("kb.search.title", count=len(chunks), query=utils.escape(query[:80]))]
     for i, ch in enumerate(chunks, start=1):
         lines.append(f"\n<b>[{i}]</b> {utils.escape((ch['content'] or '')[:400])}")
     handlers.bot.send_message(chat_id, "\n".join(lines), parse_mode="HTML")

@@ -15,6 +15,7 @@ import logging
 
 import database
 import handlers
+import i18n
 import keyboards
 import telegram_api
 import utils
@@ -38,11 +39,6 @@ _CONTENT_TYPES = [
     "text", "photo", "document", "voice", "audio", "video",
     "video_note", "sticker", "location", "contact", "animation",
 ]
-
-DEFAULT_WELCOME_TEXT = (
-    "👋 Hello! Thanks for messaging us — how can we help you today?"
-)
-
 
 def _tenant_for_connection_id(bcid: str | None) -> int | None:
     import security
@@ -119,21 +115,15 @@ def on_business_connection(bc) -> None:
               if database.is_assistant_admin(user_id) or security.is_primary_admin(user_id)
               else handlers.notify_owner)
     if is_enabled:
-        notify(
-            "🔗 <b>Business connection enabled.</b>\n"
-            f"Owner account ID: <code>{utils.escape(getattr(getattr(bc, 'user', None), 'id', '?'))}</code>\n"
-            f"Bot can reply: <b>{'yes' if can_reply else 'no'}</b>\n\n"
-            "The bot will now receive this account's customer messages. "
-            "Use /status any time."
-        )
+        notify(i18n.t(
+            "biz.conn.enabled",
+            owner=utils.escape(getattr(getattr(bc, "user", None), "id", "?")),
+            can_reply="yes" if can_reply else "no",
+        ))
         if not can_reply:
-            notify(
-                "⚠️ This connection does <b>not</b> grant reply permission, so the "
-                "bot can read but not send. Enable replies for the bot in your "
-                "Telegram Business → Chatbots settings."
-            )
+            notify(i18n.t("biz.conn.no_reply_permission"))
     else:
-        notify("🔌 <b>Business connection disabled or removed.</b>")
+        notify(i18n.t("biz.conn.disabled"))
 
 
 # =============================================================================
@@ -233,11 +223,10 @@ def _process_business_message_scoped(message) -> None:
     decision = rate_limit_service.enforce(bcid, customer_chat_id)
     if not decision.allowed:
         name = business_service.customer_display_name(bcid, customer_chat_id)
-        handlers.notify_owner(
-            f"🚦 <b>{utils.escape(name)}</b> hit the message limit "
-            f"({decision.used}/{decision.limit} in the last hour). "
-            "Auto-replies for this chat are paused for 1 hour."
-        )
+        handlers.notify_owner(i18n.t(
+            "biz.notify.rate_limit", name=utils.escape(name),
+            used=decision.used, limit=decision.limit,
+        ))
         return
 
     # Welcome a brand-new customer (its first message is the one just recorded).
@@ -287,10 +276,10 @@ def _generate_reply(conn, customer_chat_id: int, customer_text: str) -> str | No
     except AIServiceError as e:
         name = business_service.customer_display_name(bcid, customer_chat_id)
         lines = [
-            f"⚠️ Could not generate a reply for <b>{utils.escape(name)}</b> "
-            f"(chat <code>{customer_chat_id}</code>): {utils.escape(e.owner_message)}",
+            i18n.t("biz.notify.ai_failed", name=utils.escape(name),
+                   chat_id=customer_chat_id, error=utils.escape(e.owner_message)),
             "",
-            "No message was sent to the customer.",
+            i18n.t("biz.notify.ai_failed_tail"),
         ]
         if e.hints:
             lines.append("")
@@ -322,7 +311,7 @@ def _is_first_inbound(bcid: str, customer_chat_id: int) -> bool:
 
 
 def _send_welcome(conn, customer_chat_id: int) -> None:
-    text = (database.get_str("welcome_text") or "").strip() or DEFAULT_WELCOME_TEXT
+    text = (database.get_str("welcome_text") or "").strip() or i18n.t("biz.welcome_default")
     bcid = conn["business_connection_id"]
     if not (conn["is_enabled"] and conn["can_reply"]):
         return
@@ -343,12 +332,11 @@ def _handle_non_text(conn, message) -> None:
     ack = (database.get_str("nontext_ack_message") or "").strip()
     if database.get_bool("monitoring_mode"):
         name = business_service.customer_display_name(bcid, chat_id)
-        suffix = "" if not ack else " Sent the configured acknowledgement."
-        handlers.notify_owner(
-            f"📎 <b>{utils.escape(name)}</b> sent a non-text "
-            f"<i>{utils.escape(content_type)}</i> message "
-            f"(chat <code>{chat_id}</code>).{suffix}"
-        )
+        handlers.notify_owner(i18n.t(
+            "biz.notify.nontext",
+            name=utils.escape(name), type=utils.escape(content_type), chat_id=chat_id,
+            suffix=i18n.t("biz.notify.nontext_ack") if ack else "",
+        ))
     if not ack or database.message_exists(bcid, chat_id, getattr(message, "message_id", None), "in"):
         return
     if business_service.is_chat_paused(bcid, chat_id) or not _any_automation_on():
@@ -365,10 +353,7 @@ def _deliver_auto(conn, customer_chat_id: int, customer_message_id, customer_tex
                   reply_text: str) -> None:
     bcid = conn["business_connection_id"]
     if not (conn["is_enabled"] and conn["can_reply"]):
-        handlers.notify_owner(
-            "⚠️ Cannot auto-reply: the business connection is disabled or lacks "
-            "reply permission. Check Telegram Business → Chatbots."
-        )
+        handlers.notify_owner(i18n.t("biz.notify.cannot_reply"))
         return
     try:
         telegram_api.send_reply(
@@ -386,11 +371,10 @@ def _deliver_auto(conn, customer_chat_id: int, customer_message_id, customer_tex
             exc.total_count,
         )
         name = business_service.customer_display_name(bcid, customer_chat_id)
-        handlers.notify_owner(
-            f"⚠️ An automatic reply to <b>{utils.escape(name)}</b> was only "
-            f"partially delivered ({exc.sent_count}/{exc.total_count} parts). "
-            "Check the customer chat before sending anything else."
-        )
+        handlers.notify_owner(i18n.t(
+            "biz.notify.delivery_partial", name=utils.escape(name),
+            sent=exc.sent_count, total=exc.total_count,
+        ))
         return
     except Exception as exc:
         log.warning(
@@ -399,31 +383,27 @@ def _deliver_auto(conn, customer_chat_id: int, customer_message_id, customer_tex
             type(exc).__name__,
         )
         name = business_service.customer_display_name(bcid, customer_chat_id)
-        handlers.notify_owner(
-            f"⚠️ Delivery of an automatic reply to <b>{utils.escape(name)}</b> "
-            "could not be confirmed. No outbound history was recorded; check "
-            "the customer chat before retrying."
-        )
+        handlers.notify_owner(i18n.t("biz.notify.delivery_unknown",
+                                     name=utils.escape(name)))
         return
     database.insert_message(bcid, customer_chat_id, None, "out", "assistant", reply_text)
     memory_service.append_exchange(bcid, customer_chat_id, customer_text, reply_text)
     log.info("auto-replied chat=%s len=%d", utils.mask_id(customer_chat_id), len(reply_text))
     if database.get_bool("monitoring_mode"):
         name = business_service.customer_display_name(bcid, customer_chat_id)
-        handlers.notify_owner(
-            f"🤖 Auto-replied to <b>{utils.escape(name)}</b>:\n"
-            f"<i>“{utils.escape(customer_text[:200])}”</i>\n"
-            f"➡️ {utils.escape(reply_text[:500])}"
-        )
+        handlers.notify_owner(i18n.t(
+            "biz.notify.auto_replied", name=utils.escape(name),
+            text=utils.escape(customer_text[:200]),
+            reply=utils.escape(reply_text[:500]),
+        ))
 
 
 def _notify_incoming(bcid: str, customer_chat_id: int, text: str) -> None:
     name = business_service.customer_display_name(bcid, customer_chat_id)
-    handlers.notify_owner(
-        f"📥 <b>{utils.escape(name)}</b> (chat <code>{customer_chat_id}</code>):\n"
-        f"<i>{utils.escape(text[:500])}</i>\n\n"
-        "<i>Auto-reply is OFF — reply yourself or enable it with /auto_on.</i>"
-    )
+    handlers.notify_owner(i18n.t(
+        "biz.notify.incoming", name=utils.escape(name), chat_id=customer_chat_id,
+        text=utils.escape(text[:500]),
+    ))
 
 
 # =============================================================================
@@ -450,14 +430,11 @@ def on_edited_business_message(message) -> None:
         return
     name = business_service.customer_display_name(bcid, message.chat.id)
     text = (getattr(message, "text", None) or getattr(message, "caption", None) or "").strip()
-    cancellation = (
-        "\nThe pending approval for the earlier version was cancelled."
-        if invalidated else ""
-    )
-    handlers.notify_owner(
-        f"✏️ <b>{utils.escape(name)}</b> edited a message: "
-        f"<i>{utils.escape(text[:300])}</i>{cancellation}"
-    )
+    cancellation = i18n.t("biz.edited_cancelled") if invalidated else ""
+    handlers.notify_owner(i18n.t(
+        "biz.edited", name=utils.escape(name), text=utils.escape(text[:300]),
+        cancellation=cancellation,
+    ))
 
 
 def on_deleted_business_messages(deleted) -> None:
@@ -471,7 +448,4 @@ def on_deleted_business_messages(deleted) -> None:
     log.info("customer deleted %d msgs chat=%s (invalidated %d approvals)",
              len(message_ids), utils.mask_id(chat_id), invalidated)
     if invalidated and database.get_bool("monitoring_mode"):
-        handlers.notify_owner(
-            "🗑 A customer deleted a message that had a pending approval; "
-            "that approval was cancelled."
-        )
+        handlers.notify_owner(i18n.t("biz.deleted_pending"))

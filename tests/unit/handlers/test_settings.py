@@ -11,7 +11,9 @@ from types import SimpleNamespace
 
 import pytest
 
+import database
 import handlers
+import i18n
 import security
 from handlers import settings as settings_handler
 from services import ai_service
@@ -76,3 +78,39 @@ def test_root_text_reports_the_active_backend(env):
     ai_service.set_provider("cerebras")
     settings_handler.open_root(_msg())
     assert "Cerebras" in handlers.bot.send_message.call_args.args[1]
+
+
+# --- registry integrity -------------------------------------------------------
+def test_every_group_has_at_least_one_row(env):
+    """An empty group would render a section button that leads nowhere."""
+    from collections import Counter
+    counts = Counter(spec["group"] for spec in settings_handler.SETTINGS)
+    assert set(counts) <= set(settings_handler._GROUP_KEYS)
+    missing = [group for group in settings_handler._GROUP_KEYS if not counts[group]]
+    assert missing == []
+
+
+def test_every_row_is_a_real_setting_with_a_label(env):
+    for spec in settings_handler.SETTINGS:
+        assert spec["key"] in database.SETTINGS_SCHEMA, spec["key"]
+        assert i18n.t(f"set.opt.{spec['key']}") != f"set.opt.{spec['key']}"
+        for key in (spec.get("hint_key"),):
+            if key:
+                assert i18n.t(key) != key
+
+
+def test_group_screens_are_reachable_from_the_root(env):
+    settings_handler.open_root(_msg())
+    data = _row_data()
+    for group in settings_handler._GROUP_KEYS:
+        assert f"set:group:{group}" in data
+
+
+def test_limits_screen_edits_the_usage_caps(env, make_call):
+    """Group screens are edits of the current message (not new messages)."""
+    settings_handler.on_settings_callback(make_call(data="set:group:limits"))
+    markup = handlers.bot.edit_message_text.call_args.kwargs["reply_markup"]
+    data = [btn.callback_data for row in markup.keyboard for btn in row]
+    assert "set:num:max_reply_chars" in data
+    assert "set:num:max_messages_per_customer_per_hour" in data
+    assert "set:num:owner_takeover_pause_minutes" in data

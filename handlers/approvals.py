@@ -10,6 +10,7 @@ import logging
 
 import database
 import handlers
+import i18n
 import keyboards
 import security
 import telegram_api
@@ -29,7 +30,8 @@ def register(bot, cfg) -> None:
             on_approval_callback(call)
         except Exception:
             log.exception("approval callback failed")
-            telegram_api.answer_callback(bot, call.id, "Something went wrong.", show_alert=True)
+            telegram_api.answer_callback(bot, call.id, i18n.t("appr.something_wrong"),
+                                        show_alert=True)
 
     # The single owner pending-input catcher. Registered before the owner
     # fallback (main controls order). Ignores slash-commands so explicit
@@ -56,12 +58,14 @@ def render_approval_card(conn, message, customer_text: str, ai_text: str,
                          sensitive: bool, approval_id: int) -> str:
     bcid = conn["business_connection_id"]
     name = business_service.customer_display_name(bcid, message.chat.id)
-    banner = "🚨 <b>SENSITIVE</b> — please review carefully\n\n" if sensitive else ""
-    return (
-        f"{banner}📨 <b>Approval #{approval_id}</b>\n"
-        f"From: <b>{utils.escape(name)}</b> (chat <code>{message.chat.id}</code>)\n\n"
-        f"<b>Customer:</b>\n<i>{utils.escape(customer_text[:1500])}</i>\n\n"
-        f"<b>Proposed reply:</b>\n{utils.escape(ai_text[:2500])}"
+    return i18n.t(
+        "appr.card",
+        banner=i18n.t("appr.sensitive_banner") if sensitive else "",
+        id=approval_id,
+        name=utils.escape(name),
+        chat_id=message.chat.id,
+        customer=utils.escape(customer_text[:1500]),
+        reply=utils.escape(ai_text[:2500]),
     )
 
 
@@ -88,27 +92,25 @@ def on_approval_callback(call) -> None:
         _, action, aid_str = call.data.split(":", 2)
         aid = int(aid_str)
     except (ValueError, AttributeError):
-        return telegram_api.answer_callback(bot, call.id, "Bad action.")
+        return telegram_api.answer_callback(bot, call.id, i18n.t("appr.bad_action"))
 
     appr = database.get_approval(aid)
     if appr is None:
-        return telegram_api.answer_callback(bot, call.id, "Approval not found.", show_alert=True)
+        return telegram_api.answer_callback(bot, call.id, i18n.t("appr.not_found"),
+                                            show_alert=True)
     if appr["status"] != "pending":
         if appr["status"] == "sending":
             return telegram_api.answer_callback(
-                bot, call.id, "Delivery is already in progress.", show_alert=True
+                bot, call.id, i18n.t("appr.sending"), show_alert=True
             )
         if appr["status"] == "delivery_uncertain":
             _strip_buttons(call)
             return telegram_api.answer_callback(
-                bot,
-                call.id,
-                "Delivery outcome is uncertain. Check the customer chat before replying again.",
-                show_alert=True,
+                bot, call.id, i18n.t("appr.uncertain"), show_alert=True
             )
         _strip_buttons(call)
-        return telegram_api.answer_callback(bot, call.id, f"Already {appr['status']}.",
-                                            show_alert=True)
+        return telegram_api.answer_callback(
+            bot, call.id, i18n.t("appr.already", status=appr["status"]), show_alert=True)
 
     if action == "send":
         _do_send(call, appr)
@@ -119,48 +121,44 @@ def on_approval_callback(call) -> None:
     elif action == "edit":
         _start_edit(call, appr)
     else:
-        telegram_api.answer_callback(bot, call.id, "Unknown action.")
+        telegram_api.answer_callback(bot, call.id, i18n.t("appr.unknown_action"))
 
 
 def _do_send(call, appr) -> None:
     bot = handlers.bot
     conn = business_service.get_connection(appr["business_connection_id"])
     if conn is None or not (conn["is_enabled"] and conn["can_reply"]):
-        return telegram_api.answer_callback(bot, call.id, "Connection unavailable / cannot reply.",
+        return telegram_api.answer_callback(bot, call.id, i18n.t("appr.conn_unavailable"),
                                             show_alert=True)
     outcome = _claim_and_send(conn, appr, appr["ai_reply_text"], "sent")
     if outcome == "not_claimed":
         return _answer_not_claimed(call, appr["id"])
     if outcome == "delivery_failed":
         return telegram_api.answer_callback(
-            bot, call.id, "Send failed; the approval is still pending. Please retry.",
-            show_alert=True,
+            bot, call.id, i18n.t("appr.send_failed"), show_alert=True
         )
     if outcome == "partial_delivery":
         _strip_buttons(call)
         return telegram_api.answer_callback(
-            bot,
-            call.id,
-            "Part of the reply was delivered. Check the customer chat before sending more.",
-            show_alert=True,
+            bot, call.id, i18n.t("appr.partial"), show_alert=True
         )
     if outcome == "state_failed":
         _strip_buttons(call)
         return telegram_api.answer_callback(
-            bot, call.id, "Delivered, but the approval state could not be finalized.",
-            show_alert=True,
+            bot, call.id, i18n.t("appr.state_failed"), show_alert=True
         )
     _strip_buttons(call)
-    telegram_api.answer_callback(bot, call.id, "Sent ✅")
+    telegram_api.answer_callback(bot, call.id, i18n.t("appr.sent"))
 
 
 def _do_reject(call, appr) -> None:
     bot = handlers.bot
     if not database.mark_approval(appr["id"], "rejected"):
         _strip_buttons(call)
-        return telegram_api.answer_callback(bot, call.id, "Already handled.", show_alert=True)
+        return telegram_api.answer_callback(bot, call.id, i18n.t("appr.already_handled"),
+                                            show_alert=True)
     _strip_buttons(call)
-    telegram_api.answer_callback(bot, call.id, "Rejected 🚫")
+    telegram_api.answer_callback(bot, call.id, i18n.t("appr.rejected"))
     log.info("approval %s rejected", appr["id"])
 
 
@@ -170,20 +168,16 @@ def _do_pause(call, appr) -> None:
                                reason="manual_pause", minutes=None)
     database.mark_approval(appr["id"], "rejected_paused")
     _strip_buttons(call)
-    telegram_api.answer_callback(bot, call.id, "Chat paused ⏸ (use /resume_chat to resume).",
-                                 show_alert=True)
+    telegram_api.answer_callback(bot, call.id, i18n.t("appr.paused"), show_alert=True)
 
 
 def _start_edit(call, appr) -> None:
     bot = handlers.bot
     database.set_owner_pending_input(security.operator_id(), "edit_approval",
                                      {"approval_id": appr["id"]}, EDIT_TTL_MINUTES)
-    telegram_api.answer_callback(bot, call.id, "Send me the edited reply text.")
-    handlers.notify_owner(
-        f"✏️ <b>Editing reply for approval #{appr['id']}</b> "
-        f"(chat <code>{appr['customer_chat_id']}</code>).\n"
-        "Send the new reply text as your next message, or /cancel to abort."
-    )
+    telegram_api.answer_callback(bot, call.id, i18n.t("appr.edit_prompt_cb"))
+    handlers.notify_owner(i18n.t("appr.edit_prompt", id=appr["id"],
+                                 chat_id=appr["customer_chat_id"]))
 
 
 # =============================================================================
@@ -195,29 +189,23 @@ def _apply_edit(message, context: dict) -> None:
     aid = context.get("approval_id")
     appr = database.get_approval(aid) if aid is not None else None
     if appr is None or appr["status"] != "pending":
-        return handlers.notify_owner("That approval is no longer pending.")
+        return handlers.notify_owner(i18n.t("appr.edit.not_pending"))
     edited = (getattr(message, "text", None) or getattr(message, "caption", None) or "").strip()
     if not edited:
-        return handlers.notify_owner("Empty edit ignored. The approval is still pending.")
+        return handlers.notify_owner(i18n.t("appr.edit.empty"))
     conn = business_service.get_connection(appr["business_connection_id"])
     if conn is None or not (conn["is_enabled"] and conn["can_reply"]):
-        return handlers.notify_owner("Connection unavailable; the edited reply was not sent.")
+        return handlers.notify_owner(i18n.t("appr.edit.conn"))
     outcome = _claim_and_send(conn, appr, edited, "sent_edited", update_reply=True)
     if outcome == "not_claimed":
-        return handlers.notify_owner("That approval was already handled.")
+        return handlers.notify_owner(i18n.t("appr.edit.handled"))
     if outcome == "delivery_failed":
-        return handlers.notify_owner(
-            "The edited reply could not be delivered. The approval is still pending; please retry."
-        )
+        return handlers.notify_owner(i18n.t("appr.edit.failed"))
     if outcome == "partial_delivery":
-        return handlers.notify_owner(
-            "Part of the edited reply was delivered. Check the customer chat before sending more."
-        )
+        return handlers.notify_owner(i18n.t("appr.edit.partial"))
     if outcome == "state_failed":
-        return handlers.notify_owner(
-            "The edited reply was delivered, but its approval state could not be finalized."
-        )
-    handlers.notify_owner("Edited reply sent ✅")
+        return handlers.notify_owner(i18n.t("appr.edit.state_failed"))
+    handlers.notify_owner(i18n.t("appr.edit.sent"))
 
 
 def _claim_and_send(conn, appr, reply_text: str, final_status: str,
@@ -300,10 +288,11 @@ def _answer_not_claimed(call, approval_id: int) -> None:
     current = database.get_approval(approval_id)
     if current is not None and current["status"] == "sending":
         return telegram_api.answer_callback(
-            handlers.bot, call.id, "Delivery is already in progress.", show_alert=True
+            handlers.bot, call.id, i18n.t("appr.sending"), show_alert=True
         )
     _strip_buttons(call)
-    telegram_api.answer_callback(handlers.bot, call.id, "Already handled.", show_alert=True)
+    telegram_api.answer_callback(handlers.bot, call.id, i18n.t("appr.already_handled"),
+                                show_alert=True)
 
 
 def _strip_buttons(call) -> None:
@@ -351,6 +340,18 @@ def on_owner_pending_input(message) -> None:
     elif kind == "reply_to_chat":
         from handlers import owner_tools
         owner_tools.apply_pending(message, kind, context)
+    elif kind in ("rules_text", "rule_edit"):
+        from handlers import rules as rules_handler
+        rules_handler.PENDING_KINDS[kind](message, kind, context)
+    elif kind == "res_text":
+        from handlers import resources as resources_handler
+        resources_handler.apply_pending(message, kind, context)
+    elif kind == "unans_answer":
+        from handlers import unanswered
+        unanswered.apply_pending(message, kind, context)
+    elif kind in ("gate_price", "gate_free", "gate_channel"):
+        from handlers import gates
+        gates.apply_pending(message, kind, context)
     else:
         database.clear_owner_pending_input(owner)
 
@@ -361,10 +362,11 @@ def on_owner_pending_input(message) -> None:
 def render_pending_list() -> str:
     rows = database.list_pending_approvals("pending")
     if not rows:
-        return "No pending approvals. 🎉"
-    lines = [f"<b>Pending approvals ({len(rows)}):</b>"]
+        return i18n.t("appr.pending.none")
+    lines = [i18n.t("appr.pending.title", count=len(rows))]
     for r in rows:
         preview = utils.escape((r["customer_message_text"] or "")[:80])
-        lines.append(f"• #{r['id']} chat <code>{r['customer_chat_id']}</code>: <i>{preview}</i>")
-    lines.append("\nEach approval was sent as its own message with action buttons.")
+        lines.append(i18n.t("appr.pending.row", id=r["id"],
+                            chat_id=r["customer_chat_id"], preview=preview))
+    lines.append(i18n.t("appr.pending.hint"))
     return "\n".join(lines)

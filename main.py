@@ -24,6 +24,8 @@ import telebot
 import config
 import database
 import handlers
+import i18n
+import keyboards
 import security
 import telegram_api
 import utils
@@ -31,11 +33,16 @@ from handlers import (
     ai_setup,
     approvals,
     business_updates,
+    direct_messages,
     faq as faq_handler,
+    gates,
     knowledge_base,
     owner_commands,
     owner_tools,
+    resources,
+    rules,
     settings as settings_handler,
+    unanswered,
 )
 from services import ai_service, file_service, providers
 
@@ -143,7 +150,7 @@ def register_handlers(bot: telebot.TeleBot, cfg: config.Config) -> None:
     # Order = match priority for `message` updates.
     #   1. the claim handler (only active while the bot has no owner)
     #   2. owner commands / settings / approvals (pending-input catcher)
-    #   3. feature menus (AI, FAQ, KB, tools)
+    #   3. feature menus (AI, FAQ, KB, rules, resources, gates, tools)
     #   4. the business pipeline
     #   5. the catch-all fallback (last)
     security.register_claim_handler(bot)
@@ -154,32 +161,77 @@ def register_handlers(bot: telebot.TeleBot, cfg: config.Config) -> None:
     faq_handler.register(bot, cfg)
     owner_tools.register(bot, cfg)
     knowledge_base.register(bot, cfg)
+    # Owner instructions, shareable resources, skipped questions and the two
+    # entry gates (private messages only).
+    rules.register(bot, cfg)
+    resources.register(bot, cfg)
+    unanswered.register(bot, cfg)
+    gates.register(bot, cfg)
     business_updates.register(bot, cfg)
+    # Private messages addressed to the bot itself (no Telegram Business needed).
+    direct_messages.register(bot, cfg)
     owner_commands.register_fallback(bot, cfg)
 
 
+# (command, i18n key of its description) — published per language below.
+BOT_COMMANDS = [
+    ("start", "main.cmd.start"),
+    ("setup", "main.cmd.setup"),
+    ("mode", "main.cmd.mode"),
+    ("direct", "main.cmd.direct"),
+    ("ai", "main.cmd.ai"),
+    ("freeai", "main.cmd.freeai"),
+    ("aitest", "main.cmd.aitest"),
+    ("faq", "main.cmd.faq"),
+    ("kb", "main.cmd.kb"),
+    ("status", "main.cmd.status"),
+    ("health", "main.cmd.health"),
+    ("settings", "main.cmd.settings"),
+    ("language", "main.cmd.language"),
+    ("chats", "main.cmd.chats"),
+    ("stats", "main.cmd.stats"),
+    ("instructions", "main.cmd.instructions"),
+    ("rules", "main.cmd.rules"),
+    ("unanswered", "main.cmd.unanswered"),
+    ("resources", "main.cmd.resources"),
+    ("gate", "main.cmd.gate"),
+    ("help", "main.cmd.help"),
+]
+
+
 def set_bot_commands(bot: telebot.TeleBot) -> None:
-    cmds = [
-        ("start", "Control panel"),
-        ("setup", "Guided setup checklist"),
-        ("mode", "Auto-reply / draft / off"),
-        ("ai", "AI provider, key, model"),
-        ("freeai", "Free AI providers (no credit card)"),
-        ("aitest", "Test the AI connection"),
-        ("faq", "Quick answers (canned replies)"),
-        ("kb", "Knowledge base menu"),
-        ("status", "Bot, AI & connection status"),
-        ("health", "Run system checks"),
-        ("settings", "All settings"),
-        ("chats", "Recent customer chats"),
-        ("stats", "Statistics"),
-        ("instructions", "Standing instructions (tone/language)"),
-        ("help", "Usage guide"),
-    ]
+    """Publish the command menu, translated per Telegram client language.
+
+    Telegram picks the list matching the user's app language, so an Arabic user
+    sees Arabic descriptions while an English user sees English ones.
+    """
+    default_lang = i18n.language()
+    for language_code in (None, "ar", "en"):
+        code = default_lang if language_code is None else language_code
+        catalog = i18n.catalog(code)
+        commands = [
+            telebot.types.BotCommand(command, catalog.get(key, i18n.t(key)))
+            for command, key in BOT_COMMANDS
+        ]
+        try:
+            bot.set_my_commands(commands, language_code=language_code)
+        except TypeError:
+            # Older pyTelegramBotAPI without language_code: publish the default
+            # list once and stop trying.
+            if language_code is None:
+                try:
+                    bot.set_my_commands(commands)
+                except Exception:
+                    log.debug("set_my_commands failed", exc_info=True)
+            break
+        except Exception:
+            log.debug("set_my_commands failed for %s", language_code or "default",
+                      exc_info=True)
     try:
-        bot.set_my_commands([telebot.types.BotCommand(c, d) for c, d in cmds])
+        bot.set_my_description(i18n.t("main.description"))
+        bot.set_my_short_description(i18n.t("main.description_short"))
     except Exception:
-        log.debug("set_my_commands failed", exc_info=True)
+        log.debug("set_my_description failed", exc_info=True)
 
 
 # =============================================================================
@@ -264,25 +316,26 @@ def _notify_startup(bot: telebot.TeleBot, cfg: config.Config, me: dict,
         return  # nothing to notify yet; the claim code is printed in the terminal
     try:
         from handlers import owner_tools
-        text = (
-            f"✅ <b>Alfiqi Ai {VERSION} is online</b> as @{utils.escape(me['username'])}.\n"
-            f"Mode: <b>{owner_tools.current_mode()}</b>\n"
-            f"AI: <b>{'ready' if ai_service.is_ready() else 'not configured — open /ai'}</b> "
-            f"({utils.escape(ai_service.backend_label())})\n"
-            f"Cost: {utils.escape(ai_service.cost_label())}\n\n"
-            "First time? Run /setup for the checklist "
-            "(BotFather Business Mode + Telegram Business → Chatbots)."
+        text = i18n.t(
+            "main.online",
+            version=VERSION,
+            username=utils.escape(me["username"]),
+            mode=keyboards.mode_label(owner_tools.current_mode()),
+            ai_state=i18n.t("own.ai.ready") if ai_service.is_ready()
+            else i18n.t("own.ai.not_ready_short"),
+            backend=utils.escape(ai_service.backend_label()),
+            cost=utils.escape(ai_service.cost_label()),
         )
+        text += i18n.t(
+            "main.online.direct_hint",
+            state=i18n.t("main.online.on") if database.get_bool("direct_reply_enabled")
+            else i18n.t("main.online.off"),
+        )
+        text += i18n.t("main.online.setup_hint")
         if not ai_service.is_ready():
-            text += ("\n\n💡 No API key yet, or your key has no credit? Send /freeai "
-                     "for the providers that cost nothing — Google Gemini, Groq and "
-                     "Cerebras need no credit card.")
+            text += i18n.t("main.online.freeai")
         if interrupted_deliveries:
-            text += (
-                "\n\n⚠️ <b>Manual review required:</b> "
-                f"{interrupted_deliveries} approval delivery attempt(s) were interrupted. "
-                "Check the customer chat before sending another reply."
-            )
+            text += i18n.t("main.online.interrupted", count=interrupted_deliveries)
         bot.send_message(owner, text, parse_mode="HTML")
     except Exception:
         log.warning("Could not message the owner at startup "

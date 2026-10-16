@@ -40,25 +40,70 @@ Adding a provider = adding one entry below (plus a test).
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import i18n
 
 
-@dataclass(frozen=True)
 class Provider:
-    id: str
-    label: str
-    kind: str                        # "openai_compat" | "anthropic" | "codex"
-    base_url: str                    # default API base ("" => must be set by owner)
-    default_model: str
-    models: tuple[str, ...] = ()     # suggested models for the picker
-    key_url: str = ""                # where the owner gets an API key
-    key_required: bool = True
-    key_prefixes: tuple[str, ...] = ()  # how this provider's keys start
-    embed_model: str = ""            # "" => this provider cannot embed
-    docs: str = ""                   # short setup hint shown in Telegram
-    free_tier: bool = False          # usable at no cost, no credit card
-    free_note: str = ""              # one-line free-tier summary for /freeai
-    local: bool = False              # runs on the owner's own machine
+    """One AI backend.
+
+    ``label``, ``docs`` and ``free_note`` are **localised on access** through the
+    ``prov.<id>.<field>`` catalog keys (see ``i18n/``), falling back to the
+    English text given here — so switching the bot to Arabic re-renders the /ai
+    screens without rebuilding the registry.
+    """
+
+    __slots__ = ("id", "kind", "base_url", "default_model", "models", "key_url",
+                 "key_required", "key_prefixes", "embed_model", "free_tier", "local",
+                 "_label", "_docs", "_free_note")
+
+    def __init__(self, id: str, label: str, kind: str, base_url: str = "",
+                 default_model: str = "", models: tuple[str, ...] = (),
+                 key_url: str = "", key_required: bool = True,
+                 key_prefixes: tuple[str, ...] = (), embed_model: str = "",
+                 docs: str = "", free_tier: bool = False, free_note: str = "",
+                 local: bool = False):
+        self.id = id
+        self.kind = kind                    # "openai_compat" | "anthropic" | "codex"
+        self.base_url = base_url            # "" => must be set by the owner
+        self.default_model = default_model
+        self.models = tuple(models)         # suggested models for the picker
+        self.key_url = key_url              # where the owner gets an API key
+        self.key_required = key_required
+        self.key_prefixes = tuple(key_prefixes)   # how this provider's keys start
+        self.embed_model = embed_model      # "" => this provider cannot embed
+        self.free_tier = free_tier          # usable at no cost, no credit card
+        self.local = local                  # runs on the owner's own machine
+        self._label = label
+        self._docs = docs
+        self._free_note = free_note
+
+    def _localised(self, field: str, fallback: str) -> str:
+        if not fallback:
+            return fallback
+        return i18n.t(f"prov.{self.id}.{field}", default=fallback)
+
+    @property
+    def label(self) -> str:                 # short name shown in the pickers
+        return self._localised("label", self._label)
+
+    @property
+    def docs(self) -> str:                  # setup hint shown in Telegram
+        return self._localised("docs", self._docs)
+
+    @property
+    def free_note(self) -> str:             # one-line free-tier summary for /freeai
+        return self._localised("free_note", self._free_note)
+
+    def __repr__(self) -> str:              # stable, language-independent
+        return f"Provider(id={self.id!r}, kind={self.kind!r}, label={self._label!r})"
+
+    def __eq__(self, other) -> bool:
+        if not isinstance(other, Provider):
+            return NotImplemented
+        return self.id == other.id
+
+    def __hash__(self) -> int:
+        return hash(self.id)
 
 
 PROVIDERS: dict[str, Provider] = {

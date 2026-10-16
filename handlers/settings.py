@@ -9,6 +9,10 @@ int     captured through the owner pending-input flow (range validated)
 float   same as int, decimal
 str     single-line text via the pending-input flow
 text    free text (used for descriptions/instructions; newlines allowed)
+
+Every row points at an i18n key (``set.opt.<setting>``) so the panel follows the
+owner's interface language (/language); the stored setting *values* stay in their
+internal English form (``friendly``, ``auto``, ``ar`` …).
 """
 
 from __future__ import annotations
@@ -17,6 +21,7 @@ import logging
 
 import database
 import handlers
+import i18n
 import keyboards
 import security
 import telegram_api
@@ -25,81 +30,103 @@ from services import ai_service, providers
 
 log = logging.getLogger("smartel.settings")
 
-GROUPS = {
-    "reply": "🤖 Replies & behaviour",
-    "persona": "🧑‍💼 Persona & language",
-    "ai": "🧠 AI model",
-    "ground": "📚 Answers (FAQ / knowledge base)",
-    "limits": "🛡️ Safety & limits",
+_GROUP_KEYS = {
+    "reply": "set.group.reply",
+    "persona": "set.group.persona",
+    "lang": "set.group.lang",
+    "ai": "set.group.ai",
+    "ground": "set.group.ground",
+    "limits": "set.group.limits",
+    "learning": "set.group.learning",
+    "gate": "set.group.gate",
 }
 
 SETTINGS = [
     # --- replies & behaviour --------------------------------------------------
-    {"key": "auto_reply_enabled", "group": "reply", "label": "Auto-reply", "type": "bool"},
-    {"key": "approval_mode_enabled", "group": "reply", "label": "Approval (draft) mode",
-     "type": "bool"},
-    {"key": "sensitive_requires_approval", "group": "reply", "label": "Sensitive → approval",
-     "type": "bool"},
-    {"key": "monitoring_mode", "group": "reply", "label": "Notify me about activity",
-     "type": "bool"},
-    {"key": "memory_enabled", "group": "reply", "label": "Conversation memory", "type": "bool"},
-    {"key": "typing_indicator", "group": "reply", "label": "Typing indicator", "type": "bool"},
-    {"key": "reply_debounce_seconds", "group": "reply", "label": "Batch messages (seconds)",
-     "type": "float", "min": 0.0, "max": 8.0},
-    {"key": "process_nontext_enabled", "group": "reply", "label": "Read media captions",
-     "type": "bool"},
-    {"key": "nontext_ack_message", "group": "reply", "label": "Non-text auto-reply",
-     "type": "text", "hint": "Sent when a customer sends a photo/voice without text. "
-                             "Empty = never answer automatically."},
-    {"key": "greet_new_customers", "group": "reply", "label": "Welcome new customers",
-     "type": "bool"},
-    {"key": "welcome_text", "group": "reply", "label": "Welcome message", "type": "text"},
-    {"key": "owner_takeover_pause_minutes", "group": "reply", "label": "Takeover pause (min)",
-     "type": "int", "min": 1, "max": 100000},
-    {"key": "max_messages_per_customer_per_hour", "group": "reply", "label": "Rate limit / hour",
-     "type": "int", "min": 1, "max": 100000},
-    {"key": "public_direct_bot_chat_enabled", "group": "reply", "label": "Direct-DM notice",
-     "type": "bool"},
+    {"key": "auto_reply_enabled", "group": "reply", "type": "bool"},
+    {"key": "approval_mode_enabled", "group": "reply", "type": "bool"},
+    {"key": "sensitive_requires_approval", "group": "reply", "type": "bool"},
+    {"key": "monitoring_mode", "group": "reply", "type": "bool"},
+    {"key": "memory_enabled", "group": "reply", "type": "bool"},
+    {"key": "typing_indicator", "group": "reply", "type": "bool"},
+    {"key": "process_nontext_enabled", "group": "reply", "type": "bool"},
+    {"key": "nontext_ack_message", "group": "reply", "type": "text",
+     "hint_key": "set.opt.nontext_ack_message.hint"},
+    {"key": "greet_new_customers", "group": "reply", "type": "bool"},
+    {"key": "welcome_text", "group": "reply", "type": "text"},
+    {"key": "direct_reply_enabled", "group": "reply", "type": "bool",
+     "hint_key": "set.opt.direct_reply_enabled.hint"},
+    {"key": "public_direct_bot_chat_enabled", "group": "reply", "type": "bool"},
 
     # --- persona --------------------------------------------------------------
-    {"key": "assistant_name", "group": "persona", "label": "Assistant name", "type": "str",
-     "hint": "How the assistant refers to itself, e.g. “Sara”."},
-    {"key": "business_name", "group": "persona", "label": "Business name", "type": "str"},
-    {"key": "business_description", "group": "persona", "label": "What the business does",
-     "type": "text", "hint": "One or two sentences the AI uses as context."},
-    {"key": "tone", "group": "persona", "label": "Tone", "type": "enum",
-     "choices": ["friendly", "professional", "casual", "concise", "warm"]},
-    {"key": "reply_language", "group": "persona", "label": "Reply language", "type": "enum",
-     "choices": ["auto", "ar", "en", "fr", "es", "de", "tr", "fa", "ur", "ru", "id", "hi", "zh"]},
-    {"key": "signature", "group": "persona", "label": "Signature", "type": "text",
-     "hint": "Appended to every reply. Empty = no signature."},
-    {"key": "max_reply_chars", "group": "persona", "label": "Max reply length", "type": "int",
-     "min": 80, "max": 4096},
-    {"key": "disclose_ai", "group": "persona", "label": "May say it is an AI", "type": "bool"},
-    {"key": "custom_instructions", "group": "persona", "label": "Extra instructions",
-     "type": "text", "hint": "Always added to the AI prompt (also via /instructions)."},
-    {"key": "reply_priorities", "group": "persona", "label": "Reply priorities",
-     "type": "text", "hint": "Ordered priorities for replies, one per line (e.g. answer accurately, then be concise)."},
-    {"key": "never_reply_rules", "group": "persona", "label": "When not to answer",
-     "type": "text", "hint": "Topics or situations to avoid; the assistant will ask a human to follow up."},
+    {"key": "assistant_name", "group": "persona", "type": "str",
+     "hint_key": "set.opt.assistant_name.hint"},
+    {"key": "business_name", "group": "persona", "type": "str"},
+    {"key": "business_description", "group": "persona", "type": "text",
+     "hint_key": "set.opt.business_description.hint"},
+    {"key": "tone", "group": "persona", "type": "enum",
+     "choices": ["friendly", "professional", "casual", "concise", "warm"],
+     "choice_prefix": "set.tone."},
+    {"key": "reply_language", "group": "persona", "type": "enum",
+     "choices": ["auto", "ar", "en", "fr", "es", "de", "tr", "fa", "ur", "ru",
+                 "id", "hi", "zh"],
+     "choice_prefix": "set.lang."},
+    {"key": "signature", "group": "persona", "type": "text",
+     "hint_key": "set.opt.signature.hint"},
+    {"key": "disclose_ai", "group": "persona", "type": "bool"},
+    {"key": "custom_instructions", "group": "persona", "type": "text",
+     "hint_key": "set.opt.custom_instructions.hint"},
+    {"key": "reply_priorities", "group": "persona", "type": "text",
+     "hint_key": "set.opt.reply_priorities.hint"},
+    {"key": "never_reply_rules", "group": "persona", "type": "text",
+     "hint_key": "set.opt.never_reply_rules.hint"},
+
+    # --- language of the bot itself -------------------------------------------
+    {"key": "ui_language", "group": "lang", "type": "enum",
+     "choices": list(i18n.LANGUAGES),
+     "hint_key": "set.opt.ui_language.hint"},
 
     # --- AI model -------------------------------------------------------------
-    {"key": "temperature", "group": "ai", "label": "Temperature", "type": "float",
-     "min": 0.0, "max": 2.0},
-    {"key": "max_tokens", "group": "ai", "label": "Max tokens", "type": "int",
-     "min": 1, "max": 8192},
-    {"key": "ai_base_url", "group": "ai", "label": "Custom base URL", "type": "str"},
+    {"key": "temperature", "group": "ai", "type": "float", "min": 0.0, "max": 2.0},
+    {"key": "max_tokens", "group": "ai", "type": "int", "min": 1, "max": 8192},
+    {"key": "ai_base_url", "group": "ai", "type": "str"},
 
     # --- grounding ------------------------------------------------------------
-    {"key": "faq_enabled", "group": "ground", "label": "Quick answers", "type": "bool"},
-    {"key": "faq_direct_reply", "group": "ground", "label": "Exact match sends as-is",
-     "type": "bool"},
-    {"key": "faq_match_threshold", "group": "ground", "label": "FAQ match strictness (%)",
-     "type": "int", "min": 10, "max": 100,
-     "hint": "Any exact trigger = 100%. Word-form hits (deliver ↔ delivery) count as "
-             "50%, so they only reply verbatim if you lower this."},
-    {"key": "kb_enabled", "group": "ground", "label": "Knowledge base", "type": "bool"},
-    {"key": "strict_kb_mode", "group": "ground", "label": "Strict KB mode", "type": "bool"},
+    {"key": "faq_enabled", "group": "ground", "type": "bool"},
+    {"key": "faq_direct_reply", "group": "ground", "type": "bool"},
+    {"key": "faq_match_threshold", "group": "ground", "type": "int", "min": 10, "max": 100,
+     "hint_key": "set.opt.faq_match_threshold.hint"},
+    {"key": "kb_enabled", "group": "ground", "type": "bool"},
+    {"key": "strict_kb_mode", "group": "ground", "type": "bool"},
+
+    # --- limits & timing ------------------------------------------------------
+    {"key": "max_reply_chars", "group": "limits", "type": "int", "min": 80, "max": 4096},
+    {"key": "reply_debounce_seconds", "group": "limits", "type": "float",
+     "min": 0.0, "max": 8.0},
+    {"key": "max_messages_per_customer_per_hour", "group": "limits", "type": "int",
+     "min": 1, "max": 100000},
+    {"key": "owner_takeover_pause_minutes", "group": "limits", "type": "int",
+     "min": 1, "max": 100000},
+
+    # --- learning (rules, resources, unanswered) ------------------------------
+    {"key": "rules_enabled", "group": "learning", "type": "bool",
+     "hint_key": "set.opt.rules_enabled.hint"},
+    {"key": "resources_enabled", "group": "learning", "type": "bool",
+     "hint_key": "set.opt.resources_enabled.hint"},
+    {"key": "unanswered_enabled", "group": "learning", "type": "bool",
+     "hint_key": "set.opt.unanswered_enabled.hint"},
+
+    # --- entry gates (private messages only) ----------------------------------
+    {"key": "require_subscription_enabled", "group": "gate", "type": "bool",
+     "hint_key": "set.opt.require_subscription_enabled.hint"},
+    {"key": "paid_messages_enabled", "group": "gate", "type": "bool",
+     "hint_key": "set.opt.paid_messages_enabled.hint"},
+    {"key": "paid_message_stars", "group": "gate", "type": "int", "min": 0,
+     "max": 100000, "hint_key": "set.opt.paid_message_stars.hint"},
+    {"key": "paid_message_free_count", "group": "gate", "type": "int", "min": 0,
+     "max": 100000},
+    {"key": "gate_copy_to_owner", "group": "gate", "type": "bool",
+     "hint_key": "set.opt.gate_copy_to_owner.hint"},
 ]
 _BY_KEY = {s["key"]: s for s in SETTINGS}
 
@@ -112,16 +139,31 @@ def register(bot, cfg) -> None:
             on_settings_callback(call)
         except Exception:
             log.exception("settings callback failed")
-            telegram_api.answer_callback(bot, call.id, "Error.")
+            telegram_api.answer_callback(bot, call.id, i18n.t("set.error"))
 
 
 # =============================================================================
 # Rendering
 # =============================================================================
+def label_of(spec) -> str:
+    return i18n.t(f"set.opt.{spec['key']}")
+
+
+def _choice_label(spec, choice: str) -> str:
+    prefix = spec.get("choice_prefix")
+    if not prefix:
+        return choice
+    key = f"{prefix}{choice}"
+    rendered = i18n.t(key)
+    return choice if rendered == key else rendered
+
+
 def _format_value(spec) -> str:
     value = database.get_setting(spec["key"])
     if spec["type"] == "bool":
-        return "ON" if value else "OFF"
+        return i18n.t("set.value.on") if value else i18n.t("set.value.off")
+    if spec.get("choice_prefix"):
+        return _choice_label(spec, str(value))
     text = str(value)
     if spec["type"] == "text" or len(text) > 24:
         text = text.replace("\n", " ")[:24] + ("…" if len(text) > 24 else "")
@@ -133,7 +175,7 @@ def _rows_for_group(group: str) -> list[dict]:
     for spec in SETTINGS:
         if spec.get("group") != group:
             continue
-        label = f"{spec['label']}: {_format_value(spec)}"
+        label = f"{label_of(spec)}: {_format_value(spec)}"
         if spec["type"] == "bool":
             data = keyboards.cb("set", "toggle", spec["key"])
         elif spec["type"] == "enum":
@@ -148,42 +190,46 @@ def _rows_for_group(group: str) -> list[dict]:
 
 def _root_rows() -> list[dict]:
     primary = security.is_primary_admin(security.operator_id())
-    rows = [{"label": GROUPS[group], "callback_data": keyboards.cb("set", "group", group)}
-            for group in GROUPS if primary or group != "ai"]
+    rows = [{"label": i18n.t(_GROUP_KEYS[group]),
+             "callback_data": keyboards.cb("set", "group", group)}
+            for group in _GROUP_KEYS if primary or group != "ai"]
     # Delegated admins can add/test their own key for the primary-selected model,
     # but only the primary can switch providers or models.
     provider = ai_service.active_provider()
     rows.insert(3, {
-        "label": f"🧠 {'Provider' if primary else 'AI connection'}: {provider.label}",
+        "label": i18n.t("set.provider_row" if primary else "set.connection_row",
+                        label=provider.label),
         "callback_data": keyboards.cb("ai", "root"),
     })
     if primary:
         rows.insert(4, {
-            "label": f"🧠 Model: {ai_service.active_model_label()}",
+            "label": i18n.t("set.model_row", model=ai_service.active_model_label()),
             "callback_data": keyboards.cb("ai", "models"),
         })
         if not ai_service.is_ready() or providers.needs_credit(provider.id):
             rows.insert(5, {
-                "label": "🆓 Free AI providers (no card)",
+                "label": i18n.t("set.free_ai_row"),
                 "callback_data": keyboards.cb("ai", "providers_free"),
             })
     return rows
 
 
+def _mode() -> str:
+    if not database.get_bool("auto_reply_enabled"):
+        return "off"
+    return "draft" if database.get_bool("approval_mode_enabled") else "auto"
+
+
 def _root_text() -> str:
-    mode = "off"
-    if database.get_bool("auto_reply_enabled"):
-        mode = "draft" if database.get_bool("approval_mode_enabled") else "auto"
-    return (
-        "⚙️ <b>Settings</b>\n"
-        f"Reply mode: <b>{mode}</b> (change with /mode) · "
-        f"AI: <b>{utils.escape(ai_service.backend_label())}</b>\n"
-        "Choose a section:"
+    return i18n.t(
+        "set.title",
+        mode=_mode(),
+        backend=utils.escape(ai_service.backend_label()),
     )
 
 
 def _group_text(group: str) -> str:
-    return f"{GROUPS.get(group, '⚙️ Settings')}\nTap a row to change it."
+    return i18n.t("set.section_hint", title=i18n.t(_GROUP_KEYS.get(group, "set.title_plain")))
 
 
 def open_root(message) -> None:
@@ -213,15 +259,13 @@ def on_settings_callback(call) -> None:
     primary = security.is_primary_admin(security.operator_id())
     if not primary and action == "group" and len(parts) > 2 and parts[2] == "ai":
         return telegram_api.answer_callback(
-            bot, call.id, "Only the primary admin can change the AI provider/model.",
-            show_alert=True,
+            bot, call.id, i18n.t("set.primary_only"), show_alert=True,
         )
     if (not primary and action in {"enum", "num", "text", "enumval"}
             and len(parts) > 2 and parts[2] in {"ai_provider", "ai_model_by_provider",
                                                 "ai_base_url", "temperature", "max_tokens"}):
         return telegram_api.answer_callback(
-            bot, call.id, "Only the primary admin can change the AI provider/model.",
-            show_alert=True,
+            bot, call.id, i18n.t("set.primary_only"), show_alert=True,
         )
 
     if action == "root":
@@ -238,16 +282,17 @@ def on_settings_callback(call) -> None:
             bot.delete_message(call.message.chat.id, call.message.message_id)
         except Exception:
             pass
-        return telegram_api.answer_callback(bot, call.id, "Closed.")
+        return telegram_api.answer_callback(bot, call.id, i18n.t("set.closed"))
 
     if action == "toggle":
         key = parts[2]
         new_value = not database.get_bool(key)
         database.set_setting(key, new_value)
-        spec = _BY_KEY.get(key, {})
-        _back(call, spec, f"{spec.get('label', key)} → {'ON' if new_value else 'OFF'}")
+        spec = _BY_KEY.get(key, {"key": key})
+        state = i18n.t("set.value.on") if new_value else i18n.t("set.value.off")
+        _back(call, spec, i18n.t("set.saved_value", label=label_of(spec), value=state))
         return telegram_api.answer_callback(
-            bot, call.id, f"{spec.get('label', key)} {'ON' if new_value else 'OFF'}")
+            bot, call.id, i18n.t("set.toggle_alert", label=label_of(spec), state=state))
 
     if action == "enum":
         key = parts[2]
@@ -258,8 +303,11 @@ def on_settings_callback(call) -> None:
             choices = [current] + choices
         try:
             bot.edit_message_text(
-                f"Select <b>{spec['label']}</b>:", call.message.chat.id, call.message.message_id,
-                parse_mode="HTML", reply_markup=keyboards.settings_enum(key, choices, current),
+                i18n.t("set.enum_title", label=label_of(spec)),
+                call.message.chat.id, call.message.message_id,
+                parse_mode="HTML",
+                reply_markup=keyboards.settings_enum(key, choices, current,
+                                                     labels=_choice_labels(spec, choices)),
             )
         except Exception:
             pass
@@ -267,27 +315,44 @@ def on_settings_callback(call) -> None:
 
     if action == "enumval":
         key, choice = parts[2], parts[3]
-        database.set_setting(key, choice)
-        spec = _BY_KEY.get(key, {})
-        _back(call, spec, f"{spec.get('label', key)} → {choice}")
-        return telegram_api.answer_callback(bot, call.id, f"{key} → {choice}")
+        if key == "ui_language":
+            # Routed through i18n so the caches and the Telegram command menu
+            # follow along (see handlers/owner_commands.cmd_language).
+            i18n.set_language(choice)
+            from handlers import owner_commands
+            owner_commands._republish_commands()
+        else:
+            database.set_setting(key, choice)
+        spec = _BY_KEY.get(key, {"key": key})
+        _back(call, spec, i18n.t("set.saved_value", label=label_of(spec),
+                                 value=_choice_label(spec, choice)))
+        return telegram_api.answer_callback(
+            bot, call.id, i18n.t("set.saved_value", label=label_of(spec),
+                                 value=_choice_label(spec, choice)))
 
     if action in ("num", "text"):
         key = parts[2]
         spec = _BY_KEY[key]
         kind = {"int": "set_int", "float": "set_float"}.get(spec["type"], "set_text")
         database.set_owner_pending_input(security.operator_id(), kind, {"key": key}, 10)
-        hint = spec.get("hint", "")
+        hint = i18n.t(spec["hint_key"]) if spec.get("hint_key") else ""
+        if hint == spec.get("hint_key"):
+            hint = ""
         rng = ""
         if "min" in spec and "max" in spec:
-            rng = f" (allowed {spec['min']}–{spec['max']})"
-        text = (f"Send the new value for <b>{spec['label']}</b>{rng}."
-                + (f"\n<i>{utils.escape(hint)}</i>" if hint else "")
-                + "\n\n/cancel to abort.")
+            rng = i18n.t("set.prompt_range", min=spec["min"], max=spec["max"])
+        text = i18n.t("set.prompt_value", label=label_of(spec), range=rng,
+                      hint=f"\n<i>{utils.escape(hint)}</i>" if hint else "")
         handlers.notify_owner(text)
-        return telegram_api.answer_callback(bot, call.id, "Waiting for a value…")
+        return telegram_api.answer_callback(bot, call.id, i18n.t("set.waiting"))
 
     telegram_api.answer_callback(bot, call.id)
+
+
+def _choice_labels(spec, choices: list[str]) -> dict[str, str]:
+    if not spec.get("choice_prefix"):
+        return {}
+    return {choice: _choice_label(spec, choice) for choice in choices}
 
 
 def _back(call, spec, status: str) -> None:
@@ -315,21 +380,21 @@ def apply_pending(message, kind: str, context: dict) -> None:
         return
     raw = (getattr(message, "text", "") or getattr(message, "caption", "") or "").strip()
     if not raw:
-        return handlers.notify_owner("Empty value — nothing changed.")
+        return handlers.notify_owner(i18n.t("set.empty"))
 
     if kind == "set_text":
         database.set_setting(key, raw)
         return handlers.notify_owner(
-            f"✅ {spec['label']} updated:\n<b>{utils.escape(raw[:400])}</b>")
+            i18n.t("set.text_saved", label=label_of(spec), value=utils.escape(raw[:400])))
 
     try:
         value = int(raw) if kind == "set_int" else float(raw)
     except ValueError:
-        return handlers.notify_owner(f"'{utils.escape(raw)}' is not a valid number. "
-                                     f"{spec['label']} unchanged.")
+        return handlers.notify_owner(
+            i18n.t("set.not_number", raw=utils.escape(raw), label=label_of(spec)))
     lo, hi = spec.get("min"), spec.get("max")
     if (lo is not None and value < lo) or (hi is not None and value > hi):
         return handlers.notify_owner(
-            f"Value must be between {lo} and {hi}. {spec['label']} unchanged.")
+            i18n.t("set.out_of_range", low=lo, high=hi, label=label_of(spec)))
     database.set_setting(key, value)
-    handlers.notify_owner(f"✅ {spec['label']} set to <b>{value}</b>.")
+    handlers.notify_owner(i18n.t("set.number_saved", label=label_of(spec), value=value))

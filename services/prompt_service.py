@@ -12,7 +12,7 @@ import logging
 
 import database
 import utils
-from services import faq_service, kb_service, memory_service
+from services import faq_service, kb_service, memory_service, resource_service, rules_service
 
 log = logging.getLogger("smartel.prompt")
 
@@ -78,10 +78,23 @@ def apply_signature(text: str) -> str:
     return f"{text.rstrip()}\n{signature}"
 
 
-def _identity_block() -> list[str]:
+def _identity_block(direct: bool = False) -> list[str]:
     business = (database.get_str("business_name") or "").strip()
     assistant = (database.get_str("assistant_name") or "").strip()
     description = (database.get_str("business_description") or "").strip()
+
+    if direct:
+        # Direct messages are personal conversations with whoever writes to this
+        # Telegram account — not a shop front. The persona may still carry a
+        # business name when the owner uses the same bot for work.
+        intro = (f"You are {assistant}, the Telegram assistant that answers private "
+                 "messages sent to" if assistant
+                 else "You are the Telegram assistant that answers private messages "
+                      "sent to")
+        lines = [f"{intro} {business}." if business else f"{intro} this account."]
+        if description:
+            lines.append(f"About the account holder: {description}")
+        return lines
 
     if assistant:
         intro = f"You are {assistant}, the Telegram assistant of"
@@ -108,7 +121,9 @@ def _language_line() -> str:
         return (
             "Language: reply in the same language the customer used (Arabic, "
             "English, or a mix — match their dominant language). Never switch "
-            "language unless the customer does."
+            "language unless the customer does. An Arabic message always gets an "
+            "Arabic reply: use clear Modern Standard Arabic, and light Egyptian "
+            "dialect when the customer writes in Egyptian dialect."
         )
     name = LANGUAGE_NAMES.get(setting, setting)
     return f"Language: always reply in {name}, whatever language the customer writes in."
@@ -125,16 +140,30 @@ def _disclosure_line() -> str:
     )
 
 
-def build_system_prompt(faq_matches: list | None = None, kb_chunks: list | None = None) -> str:
-    """Compose the full system prompt (persona + rules + grounding)."""
+def build_system_prompt(faq_matches: list | None = None, kb_chunks: list | None = None,
+                        direct: bool = False) -> str:
+    """Compose the full system prompt (persona + rules + grounding).
+
+    ``direct`` switches the framing from "business account answering customers"
+    to "personal assistant answering the private messages sent to this account".
+    """
     tone = (database.get_str("tone") or "friendly").strip().lower()
     max_chars = database.get_int("max_reply_chars")
     parts: list[str] = []
-    parts.extend(_identity_block())
-    parts.append(
-        "You are answering private customer messages on the business's Telegram "
-        "account. Write the reply that the business would send."
-    )
+    parts.extend(_identity_block(direct=direct))
+    if direct:
+        parts.append(
+            "You are answering private personal messages sent to this Telegram "
+            "account. Write the reply the account holder would send: natural, "
+            "human and to the point. These are personal conversations — do not "
+            "answer like a shop, do not invent facts about the account holder, "
+            "and if you do not know something say you will check and come back."
+        )
+    else:
+        parts.append(
+            "You are answering private customer messages on the business's Telegram "
+            "account. Write the reply that the business would send."
+        )
     parts.append(f"Tone: {TONE_GUIDANCE.get(tone, TONE_GUIDANCE['friendly'])}")
     parts.append(_language_line())
     parts.append(f"Keep replies under about {max_chars} characters.")
@@ -171,6 +200,32 @@ def build_system_prompt(faq_matches: list | None = None, kb_chunks: list | None 
     if kb_block:
         parts.append(kb_block)
 
+    # Owner-written topic rules, shareable resources and learned answers. Each
+    # helper returns "" when its switch is off, so disabling them in /settings
+    # removes them from the prompt completely.
+    rules_block = rules_service.prompt_block()
+    if rules_block:
+        parts.append(rules_block)
+
+    resources_block = resource_service.prompt_block()
+    if resources_block:
+        parts.append(resources_block)
+
+    learned_block = rules_service.answers_block()
+    if learned_block:
+        parts.append(learned_block)
+
+    # The escape hatch: when the assistant truly has nothing to say, it answers
+    # with this exact marker and the pipeline files the question for the owner.
+    if database.get_bool("unanswered_enabled"):
+        parts.append(
+            "WHEN YOU CANNOT ANSWER\n"
+            f"If you cannot answer the message from the approved answers, the rules "
+            f"or your own knowledge — do not guess and do not promise to check "
+            f"later: answer with exactly {rules_service.UNANSWERED_MARKER} and "
+            f"nothing else."
+        )
+
     return "\n\n".join(p for p in parts if p)
 
 
@@ -178,15 +233,17 @@ def build_system_prompt(faq_matches: list | None = None, kb_chunks: list | None 
 # Message assembly
 # =============================================================================
 def build_messages(business_connection_id: str, customer_chat_id: int,
-                   customer_text: str) -> tuple[list[dict], str | None]:
+                   customer_text: str, direct: bool = False) -> tuple[list[dict], str | None]:
     """Returns ``(messages, short_circuit_reply)``.
 
     ``short_circuit_reply`` is not None when the model must NOT be called:
     either an exact FAQ answer (sent verbatim) or strict-KB "no information".
     """
     # 1) Exact FAQ hit -> canned answer, no model call (no hallucination risk).
-    faq_match, direct = faq_service.resolve(customer_text)
-    if direct and faq_match is not None:
+    # NOTE: keep ``direct`` (the caller's framing flag) intact — the FAQ helper
+    # returns its own "send verbatim" flag, which used to shadow it.
+    faq_match, faq_is_direct = faq_service.resolve(customer_text)
+    if faq_is_direct and faq_match is not None:
         try:
             database.touch_faq_hit(faq_match.entry_id)
         except Exception:
@@ -208,7 +265,8 @@ def build_messages(business_connection_id: str, customer_chat_id: int,
     elif database.get_bool("faq_enabled"):
         faq_matches = faq_service.search(customer_text, limit=3)
 
-    system = build_system_prompt(faq_matches=faq_matches, kb_chunks=kb_chunks)
+    system = build_system_prompt(faq_matches=faq_matches, kb_chunks=kb_chunks,
+                                 direct=direct)
     messages: list[dict] = [{"role": "system", "content": system}]
     messages.extend(memory_service.get_recent(business_connection_id, customer_chat_id))
     messages.append({"role": "user", "content": customer_text})
