@@ -13,6 +13,7 @@ import re
 from pathlib import Path
 
 import database
+import i18n
 from services import embedding_service, file_service
 from services.ai_service import AIServiceError as OpenAIServiceError
 
@@ -29,6 +30,11 @@ CONTEXT_CHAR_BUDGET = 6000
 # (Codex), where retrieval is keyword-only and misses short/stop-word questions.
 SMALL_KB_ALWAYS_INCLUDE = 12
 STRICT_NO_INFO = "I don't have enough information about that in the knowledge base."
+
+
+def strict_no_info() -> str:
+    """Canned reply when strict KB mode finds nothing (owner's language)."""
+    return i18n.t("kb.strict_no_info", default=STRICT_NO_INFO)
 
 
 # =============================================================================
@@ -182,7 +188,7 @@ def search_for_prompt(query: str) -> tuple[list, str | None]:
     else:
         chunks = search(query)
     if database.get_bool("strict_kb_mode") and not chunks:
-        return [], STRICT_NO_INFO
+        return [], strict_no_info()
     return chunks, None
 
 

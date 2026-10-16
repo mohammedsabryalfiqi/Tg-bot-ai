@@ -64,6 +64,11 @@ SETTINGS_SCHEMA: dict[str, tuple[type, object]] = {
     "monitoring_mode": (bool, True),
     "max_messages_per_customer_per_hour": (int, 20),
     "public_direct_bot_chat_enabled": (bool, False),
+    # Answer the private messages people send to the BOT's own chat (no Telegram
+    # Business account needed). Gated by the same auto_reply/approval switches.
+    "direct_reply_enabled": (bool, True),
+    # Interface language of the bot itself: ar (default) | en. See i18n.py.
+    "ui_language": (str, "ar"),
     # Internal extra (not in the original spec list): allow processing of
     # non-text business messages. Off by default per spec ("text by default").
     "process_nontext_enabled": (bool, False),

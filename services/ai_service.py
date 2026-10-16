@@ -27,6 +27,7 @@ from urllib.parse import urlparse
 import requests
 
 import database
+import i18n
 import utils
 from services import providers
 
@@ -286,7 +287,7 @@ def backend_label() -> str:
             return f"custom endpoint ({host})"
         return "custom endpoint (not configured)"
     if provider.kind == "codex":
-        return "ChatGPT via Codex CLI"
+        return i18n.t("ai.model_label.codex_cli")
     return provider.label
 
 
@@ -294,7 +295,7 @@ def active_model_label() -> str:
     model = active_model()
     provider = active_provider()
     if provider.id == "codex" and model == "codex-default":
-        return "Codex default"
+        return i18n.t("ai.model_label.codex_default")
     return model or "(not set)"
 
 
@@ -346,7 +347,8 @@ def disconnect_api_key(provider_id: str | None = None) -> None:
 def set_provider(provider_id: str) -> None:
     provider = providers.get(provider_id)
     if provider is None:
-        raise AIServiceError(f"Unknown provider: {provider_id}", kind="bad_request")
+        raise AIServiceError(i18n.t("ai.err.unknown_provider", provider=provider_id),
+                             kind="bad_request")
     database.set_setting("ai_provider", provider.id)
     log.info("AI provider switched to %s", provider.id)
 
@@ -407,32 +409,27 @@ VERIFICATION_MARKERS = (
 
 # Extra per-provider hint, appended when a key is rejected — the mistakes owners
 # actually make on each platform.
-KEY_HINTS: dict[str, str] = {
-    "openai": "OpenAI needs credit on the API account — a ChatGPT Plus subscription "
-              "is not API credit (platform.openai.com → Billing).",
-    "anthropic": "Anthropic needs credit on console.anthropic.com — a Claude "
-                 "subscription is not API credit.",
-    "google": "Use a key from aistudio.google.com/app/apikey (Gemini API), not a "
-              "Google Cloud OAuth token.",
-    "groq": "Groq keys come from console.groq.com/keys — a free account, no card.",
-    "cerebras": "Cerebras keys come from cloud.cerebras.ai → API Keys.",
-    "openrouter": "OpenRouter: models ending in ':free' need no credit; any other "
-                  "model needs a paid balance.",
-    "mistral": "Mistral's free plan needs phone verification before the key works.",
-    "nvidia": "NVIDIA: copy the model name exactly as build.nvidia.com shows it "
-              "(e.g. meta/llama-3.1-8b-instruct).",
-    "huggingface": "Hugging Face: use a token with 'Read' scope, and open the model "
-                   "page once to accept its licence if it is gated.",
-    "deepseek": "DeepSeek keys only work after the balance is topped up "
-                "(platform.deepseek.com → Top up).",
-    "together": "Together needs a minimum top-up before the key works.",
-    "pollinations": "Pollinations needs no key at all — a 402/429 here means the "
-                    "free per-IP slot is busy: wait ~30 seconds and retry.",
+# Per-provider hint KEY (resolved through i18n so the owner reads it in their
+# own language). The texts live in i18n/{ar,en}.py as ``ai.hint.<provider>``.
+KEY_HINT_KEYS: dict[str, str] = {
+    "openai": "ai.hint.openai",
+    "anthropic": "ai.hint.anthropic",
+    "google": "ai.hint.google",
+    "groq": "ai.hint.groq",
+    "cerebras": "ai.hint.cerebras",
+    "openrouter": "ai.hint.openrouter",
+    "mistral": "ai.hint.mistral",
+    "nvidia": "ai.hint.nvidia",
+    "huggingface": "ai.hint.huggingface",
+    "deepseek": "ai.hint.deepseek",
+    "together": "ai.hint.together",
+    "pollinations": "ai.hint.pollinations",
 }
 
-# Free providers suggested when the current one cannot be used.
-FREE_HINT = "Free providers that need no card: Google Gemini, Groq, Cerebras, " \
-            "Mistral — open /ai → 🆓 Free providers (or send /freeai)."
+
+def free_hint() -> str:
+    """Hint pointing at the zero-cost providers."""
+    return i18n.t("ai.hint.free")
 
 
 def _parse_error_body(response: requests.Response) -> tuple[str, str, str]:
@@ -478,73 +475,50 @@ def _classify(status: int, detail: str, code: str, err_type: str,
     most is between a wrong key (auth), a key with no money behind it
     (no_credit) and a model name the account cannot run (model).
     """
-    label = provider.label if provider is not None else "The provider"
+    label = provider.label if provider is not None else i18n.t("ai.classify.generic_label")
     blob = _blob(detail, code, err_type)
     tail = f" ({detail})" if detail else ""
 
     # --- model name / model access -------------------------------------------
     param_issue = "max_tokens" in blob or "temperature" in blob or "max_completion" in blob
     if status in (400, 404) and not param_issue and _has(blob, MODEL_MARKERS):
-        return "model", (
-            f"{label} rejected the model name{tail} Your key may not have access to "
-            "it, or the name is spelled differently on this provider."
-        )
+        return "model", i18n.t("ai.classify.model", label=label, tail=tail)
 
     # --- no credit, or a free-tier quota that simply resets -------------------
     if status == 402 and provider is not None and provider.id == "pollinations":
         # Pollinations answers 402 when the free per-IP slot is busy, not when
         # money is missing — it never asks for payment.
-        return "rate_limit", (
-            f"{label} is throttling this address{tail} The free endpoint allows "
-            "roughly one request per 30 seconds: wait a moment and test again."
-        )
+        return "rate_limit", i18n.t("ai.classify.pollinations_busy", label=label, tail=tail)
     if status == 402 or (status in (400, 401, 403, 429)
                          and (_has(blob, BILLING_MARKERS) or _has(blob, RATE_MARKERS))):
         if status == 402 or _has(blob, BILLING_MARKERS):
-            return "no_credit", (
-                f"{label}: the key was understood, but the account has no credit left "
-                f"or its paid quota is used up{tail}"
-            )
-        return "rate_limit", (
-            f"{label} hit a rate/quota limit{tail} Free tiers cap requests per "
-            "minute or per day — this resets on its own, nothing is broken."
-        )
+            return "no_credit", i18n.t("ai.classify.no_credit", label=label, tail=tail)
+        return "rate_limit", i18n.t("ai.classify.rate_limit", label=label, tail=tail)
 
     # --- region / availability -----------------------------------------------
     if status in (401, 403) and _has(blob, REGION_MARKERS):
-        return "region", (
-            f"{label} refused the request because of your country/region{tail} "
-            "Another provider will work."
-        )
+        return "region", i18n.t("ai.classify.region", label=label, tail=tail)
 
     # --- bad key -------------------------------------------------------------
     if status in (401, 403):
-        extra = " Finish the account verification first." \
+        extra = i18n.t("ai.classify.verify_suffix") \
             if _has(blob, VERIFICATION_MARKERS) else ""
-        return "auth", (
-            f"{label} rejected this API key (HTTP {status}){tail}{extra}"
-        )
+        return "auth", i18n.t("ai.classify.auth", label=label, status=status,
+                              tail=tail, extra=extra)
 
     # --- endpoint / URL ------------------------------------------------------
     if status == 404:
-        return "bad_request", (
-            f"{label} returned 404 — the base URL or the endpoint path is wrong "
-            f"(most providers expect the base URL to end in /v1){tail}"
-        )
+        return "bad_request", i18n.t("ai.classify.not_found", label=label, tail=tail)
 
     # --- rate limit ----------------------------------------------------------
     if status == 429:
-        return "rate_limit", (
-            f"{label} is rate limiting the bot right now{tail} Free tiers cap "
-            "requests per minute/day; this resets on its own."
-        )
+        return "rate_limit", i18n.t("ai.classify.too_many", label=label, tail=tail)
 
     if status >= 500:
-        return "server", (
-            f"{label} is having problems (HTTP {status}). Retry in a moment.{tail}"
-        )
+        return "server", i18n.t("ai.classify.server", label=label, status=status,
+                                tail=tail)
 
-    return "bad_request", f"{label} rejected the request (HTTP {status}).{tail}"
+    return "bad_request", i18n.t("ai.classify.other", label=label, status=status, tail=tail)
 
 
 def hints_for(kind: str, provider=None) -> tuple[str, ...]:
@@ -553,52 +527,42 @@ def hints_for(kind: str, provider=None) -> tuple[str, ...]:
     provider_id = provider.id if provider is not None else ""
     if kind == "no_credit":
         hints += [
-            "This is a billing/quota problem, not a broken key — re-sending the same "
-            "key will not help.",
-            "Either add credit at the provider's billing page, or switch to a "
-            "provider with a real free tier.",
-            FREE_HINT,
+            i18n.t("ai.hint_rule.no_credit.1"),
+            i18n.t("ai.hint_rule.no_credit.2"),
+            free_hint(),
         ]
     elif kind == "auth":
         hints += [
-            "Check the key was copied from THIS provider — a Groq/OpenRouter/Gemini "
-            "key never works on another one.",
-            "Paste it again with no spaces or line breaks, and make sure it was not "
-            "revoked or expired.",
+            i18n.t("ai.hint_rule.auth.1"),
+            i18n.t("ai.hint_rule.auth.2"),
         ]
         if provider is not None and provider.key_url:
-            hints.append(f"Create a fresh key: {provider.key_url}")
-        hints.append(FREE_HINT)
+            hints.append(i18n.t("ai.hint_rule.auth.new_key", url=provider.key_url))
+        hints.append(free_hint())
     elif kind == "model":
         hints += [
-            "Open /ai → 🧠 Change model → 🔄 Load models from the provider to see the "
-            "exact names this key can run.",
-            "Free tiers often allow only some models — pick a smaller/older one.",
+            i18n.t("ai.hint_rule.model.1"),
+            i18n.t("ai.hint_rule.model.2"),
         ]
     elif kind == "rate_limit":
         hints += [
-            "Wait a minute and run /aitest again; free quotas reset per minute or per "
-            "day.",
-            "For a bigger free daily quota use Google Gemini, Groq or Cerebras.",
+            i18n.t("ai.hint_rule.rate_limit.1"),
+            i18n.t("ai.hint_rule.rate_limit.2"),
         ]
     elif kind == "region":
-        hints = [FREE_HINT]
+        hints = [free_hint()]
     elif kind == "bad_request":
-        hints = [
-            "Check the base URL ends in /v1 and that the model name matches the "
-            "provider's docs.",
-        ]
+        hints = [i18n.t("ai.hint_rule.bad_request")]
     elif kind == "connection":
-        hints = ["The server could not be reached — check this machine's internet "
-                 "access, DNS and any firewall/proxy."]
+        hints = [i18n.t("ai.hint_rule.connection")]
     elif kind == "timeout":
-        hints = ["The provider took too long. Retry, or pick a faster provider "
-                 "(Groq and Cerebras answer in well under a second)."]
+        hints = [i18n.t("ai.hint_rule.timeout")]
     elif kind == "no_key":
-        hints = ["Open /ai → 🔑 Add / update API key.", FREE_HINT]
+        hints = [i18n.t("ai.hint_rule.no_key.1"), free_hint()]
 
-    specific = KEY_HINTS.get(provider_id)
-    if specific and specific not in hints:
+    hint_key = KEY_HINT_KEYS.get(provider_id)
+    specific = i18n.t(hint_key) if hint_key else ""
+    if specific and specific != hint_key and specific not in hints:
         hints.insert(0 if kind in ("auth", "no_credit", "model") else len(hints), specific)
     return tuple(dict.fromkeys(hints))
 
@@ -617,11 +581,12 @@ def _post_json(url: str, headers: dict, payload: dict, *, timeout, what: str,
         try:
             response = requests.post(url, headers=headers, json=payload, timeout=timeout)
         except requests.Timeout as e:
-            last_error = AIServiceError(f"{what} timed out. Try again.", kind="timeout", cause=e,
+            last_error = AIServiceError(i18n.t("ai.err.timeout", what=what),
+                                        kind="timeout", cause=e,
                                         hints=hints_for("timeout", provider))
         except requests.RequestException as e:
             last_error = AIServiceError(
-                f"Could not reach the provider ({type(e).__name__}). Check the network.",
+                i18n.t("ai.err.network", error=type(e).__name__),
                 kind="connection", cause=e, hints=hints_for("connection", provider),
             )
         else:
@@ -630,7 +595,7 @@ def _post_json(url: str, headers: dict, payload: dict, *, timeout, what: str,
                     return response.json()
                 except ValueError as e:
                     raise AIServiceError(
-                        f"{what}: the provider returned a non-JSON response.", kind="unknown", cause=e
+                        i18n.t("ai.err.non_json", what=what), kind="unknown", cause=e
                     )
             error = _error_from_response(response, provider)
             if error.kind not in ("server", "rate_limit", "timeout"):
@@ -646,7 +611,8 @@ def _post_json(url: str, headers: dict, payload: dict, *, timeout, what: str,
                 continue
         if attempt < MAX_ATTEMPTS:
             time.sleep(1.5 * attempt)
-    raise last_error or AIServiceError(f"{what} failed.", kind="unknown")
+    raise last_error or AIServiceError(i18n.t("ai.err.what_failed", what=what),
+                                       kind="unknown")
 
 
 # =============================================================================
@@ -701,11 +667,11 @@ def _extract_anthropic_text(body: dict) -> str:
 def _openai_compat_chat(provider, model: str, messages: list[dict], temperature, max_tokens) -> str:
     base = active_base_url(provider.id).rstrip("/")
     if not base:
-        raise AIServiceError("No base URL configured for this endpoint.", kind="no_key")
+        raise AIServiceError(i18n.t("ai.err.no_base_url"), kind="no_key")
     key = resolve_api_key(provider.id)
     if not key and provider.key_required:
         raise AIServiceError(
-            "No API key configured for this provider. Add one with /ai.", kind="no_key"
+            i18n.t("ai.err.no_key"), kind="no_key"
         )
     headers = {"Content-Type": "application/json"}
     if key:
@@ -745,7 +711,7 @@ def _openai_compat_chat(provider, model: str, messages: list[dict], temperature,
             raise
     text = _extract_openai_text(body)
     if not text:
-        raise AIServiceError("The model returned an empty reply.", kind="unknown")
+        raise AIServiceError(i18n.t("ai.err.empty_reply"), kind="unknown")
     return text
 
 
@@ -754,7 +720,7 @@ def _anthropic_chat(provider, model: str, messages: list[dict], temperature, max
     key = resolve_api_key(provider.id)
     if not key:
         raise AIServiceError(
-            "No Anthropic API key configured. Add one with /ai.", kind="no_key"
+            i18n.t("ai.err.no_anthropic_key"), kind="no_key"
         )
     system_text, convo = _split_system(messages)
     payload = {
@@ -772,11 +738,11 @@ def _anthropic_chat(provider, model: str, messages: list[dict], temperature, max
         "anthropic-version": "2023-06-01",
     }
     body = _post_json(f"{base}/messages", headers, payload,
-                      timeout=HTTP_TIMEOUT, what=f"{provider.label} chat",
+                      timeout=HTTP_TIMEOUT, what=i18n.t("ai.what.chat", label=provider.label),
                       provider=provider)
     text = _extract_anthropic_text(body)
     if not text:
-        raise AIServiceError("The model returned an empty reply.", kind="unknown")
+        raise AIServiceError(i18n.t("ai.err.empty_reply"), kind="unknown")
     return text
 
 
@@ -824,13 +790,12 @@ def embed(texts: list[str], *, model: str | None = None) -> list[list[float]]:
     provider = _embed_provider()
     if provider is None:
         raise AIServiceError(
-            "Embeddings are not available for the active provider "
-            "(knowledge base will use keyword search).",
+            i18n.t("ai.err.no_embeddings_full"),
             kind="no_embeddings",
         )
     base = active_base_url(provider.id).rstrip("/")
     if not base:
-        raise AIServiceError("No base URL for embeddings.", kind="no_embeddings")
+        raise AIServiceError(i18n.t("ai.err.no_embeddings_url"), kind="no_embeddings")
     key = resolve_api_key(provider.id)
     headers = {"Content-Type": "application/json"}
     if key:
@@ -838,11 +803,12 @@ def embed(texts: list[str], *, model: str | None = None) -> list[list[float]]:
     embed_model = model or provider.embed_model
     payload = {"model": embed_model, "input": [str(t)[:8000] for t in texts]}
     body = _post_json(f"{base}/embeddings", headers, payload,
-                      timeout=HTTP_TIMEOUT, what=f"{provider.label} embeddings",
+                      timeout=HTTP_TIMEOUT,
+                      what=i18n.t("ai.what.embeddings", label=provider.label),
                       provider=provider)
     data = body.get("data")
     if not isinstance(data, list) or len(data) != len(texts):
-        raise AIServiceError("The embeddings endpoint returned an unexpected payload.",
+        raise AIServiceError(i18n.t("ai.err.embeddings_payload"),
                              kind="unknown")
     return [list(item.get("embedding") or []) for item in data]
 
@@ -877,18 +843,11 @@ def key_shape_problem(provider, key: str) -> str | None:
     if not value:
         return None
     if BOT_TOKEN_RE.match(value):
-        return (
-            "That is your Telegram bot token (from @BotFather), not an AI API key. "
-            f"The bot token is already in use — what {provider.label} needs is its own "
-            "API key, from that provider's own website."
-        )
+        return i18n.t("ai.shape.bot_token", label=provider.label)
     matches = providers.key_prefix_matches(value)
     if matches and provider.id not in [m.id for m in matches]:
-        names = " or ".join(m.label for m in matches[:2])
-        return (
-            f"This looks like a key for {names}, but you are adding it to "
-            f"{provider.label}. Each provider only accepts its own keys."
-        )
+        names = i18n.t("util.or_join").join(m.label for m in matches[:2])
+        return i18n.t("ai.shape.other_provider", names=names, label=provider.label)
     return None
 
 
@@ -918,28 +877,31 @@ def check_key(provider_id: str, key: str, *, model: str | None = None) -> KeyChe
     """Live-check a key against the provider (and that the model name works)."""
     provider = providers.get(provider_id)
     if provider is None:
-        return KeyCheck(False, "Unknown provider.", kind="bad_request")
+        return KeyCheck(False, i18n.t("ai.unknown_provider"), kind="bad_request")
     if not (key or "").strip() and provider.key_required:
         return KeyCheck(
             False,
-            f"No API key for {provider.label} yet.",
+            i18n.t("ai.check.no_key", label=provider.label),
             kind="no_key",
-            hints=(f"Send the key: /ai → 🔑 Add / update API key."
-                   + (f" Get one at {provider.key_url}." if provider.key_url else ""),
-                   FREE_HINT),
+            hints=(i18n.t("ai.check.no_key_hint")
+                   + (i18n.t("ai.check.get_one_at", url=provider.key_url)
+                      if provider.key_url else ""),
+                   free_hint()),
         )
     cleaned = _clean_key(key)
     shape_problem = key_shape_problem(provider, cleaned)
     if shape_problem:
         hints = [
-            f"You are adding a key for {provider.label}; get it from "
-            + (provider.key_url + "." if provider.key_url else "that provider's console."),
+            i18n.t("ai.check.shape_hint", label=provider.label,
+                   source=provider.key_url + "." if provider.key_url
+                   else i18n.t("ai.check.that_console")),
         ]
         if providers.key_prefix_matches(cleaned):
             owner = providers.looks_like_key_of(cleaned)
             if owner is not None and owner.key_url:
-                hints.append(f"That key belongs to {owner.label}: {owner.key_url}")
-        hints.append(FREE_HINT)
+                hints.append(i18n.t("ai.check.belongs_to", label=owner.label,
+                                    url=owner.key_url))
+        hints.append(free_hint())
         return KeyCheck(False, shape_problem, kind="auth",
                         hints=tuple(hints),
                         suggestions=tuple(providers.switch_suggestions(provider.id)))
@@ -955,8 +917,9 @@ def check_key(provider_id: str, key: str, *, model: str | None = None) -> KeyChe
                         model=use_model)
     return KeyCheck(
         True,
-        f"Connection OK — {provider.label} answered with “{utils.plain_text(text)[:60]}” "
-        f"using {use_model} ({time.monotonic() - started:.1f}s).",
+        i18n.t("ai.check.ok", label=provider.label,
+               sample=utils.plain_text(text)[:60], model=use_model,
+               seconds=f"{time.monotonic() - started:.1f}"),
         model=use_model, elapsed=time.monotonic() - started,
     )
 
@@ -973,7 +936,7 @@ def _probe(provider, key: str, model: str) -> str:
     if provider.kind == "codex":
         from services import codex_service
         if not codex_service.is_available():
-            raise AIServiceError("The Codex CLI is not installed on this machine.", kind="no_key")
+            raise AIServiceError(i18n.t("ai.err.codex_missing"), kind="no_key")
         return codex_service.chat(messages, model=model)
     if provider.kind == "anthropic":
         payload = {"model": model, "max_tokens": 16, "messages": messages}
@@ -981,18 +944,19 @@ def _probe(provider, key: str, model: str) -> str:
                    "anthropic-version": "2023-06-01"}
         base = (provider.base_url or "https://api.anthropic.com/v1").rstrip("/")
         body = _post_json(f"{base}/messages", headers, payload,
-                          timeout=VALIDATE_TIMEOUT, what="Anthropic test",
+                          timeout=VALIDATE_TIMEOUT, what=i18n.t("ai.what.anthropic_test"),
                           provider=provider)
         return _extract_anthropic_text(body) or "ok"
     base = (active_base_url(provider.id) or provider.base_url or "").rstrip("/")
     if not base:
-        raise AIServiceError("No base URL set for this endpoint.", kind="bad_request")
+        raise AIServiceError(i18n.t("ai.err.no_base_url_probe"), kind="bad_request")
     headers = {"Content-Type": "application/json"}
     if key:
         headers["Authorization"] = f"Bearer {key}"
     payload = {"model": model, "messages": messages, "max_tokens": 16}
     body = _post_json(f"{base}/chat/completions", headers, payload,
-                      timeout=VALIDATE_TIMEOUT, what=f"{provider.label} test",
+                      timeout=VALIDATE_TIMEOUT,
+                      what=i18n.t("ai.what.test", label=provider.label),
                       provider=provider)
     return _extract_openai_text(body) or "ok"
 
@@ -1087,7 +1051,7 @@ def list_models(provider_id: str | None = None, *, key: str | None = None,
         return []
     base = (active_base_url(provider.id) or provider.base_url or "").rstrip("/")
     if not base:
-        raise AIServiceError("No base URL set for this endpoint.", kind="bad_request",
+        raise AIServiceError(i18n.t("ai.err.no_base_url_list"), kind="bad_request",
                              hints=hints_for("bad_request", provider))
     token = (key if key is not None else resolve_api_key(provider.id)) or ""
     headers = {"Content-Type": "application/json"}
@@ -1100,19 +1064,20 @@ def list_models(provider_id: str | None = None, *, key: str | None = None,
     try:
         response = requests.get(url, headers=headers, timeout=VALIDATE_TIMEOUT)
     except requests.Timeout as e:
-        raise AIServiceError(f"{provider.label}: fetching the model list timed out.",
+        raise AIServiceError(i18n.t("ai.err.model_list_timeout", label=provider.label),
                              kind="timeout", cause=e,
                              hints=hints_for("timeout", provider)) from e
     except requests.RequestException as e:
         raise AIServiceError(
-            f"Could not reach {provider.label} ({type(e).__name__}).",
+            i18n.t("ai.err.model_list_unreachable", label=provider.label,
+                   error=type(e).__name__),
             kind="connection", cause=e, hints=hints_for("connection", provider)) from e
     if response.status_code >= 400:
         raise _error_from_response(response, provider)
     try:
         body = response.json()
     except ValueError as e:
-        raise AIServiceError(f"{provider.label} returned a non-JSON model list.",
+        raise AIServiceError(i18n.t("ai.err.model_list_not_json", label=provider.label),
                              kind="unknown", cause=e) from e
     return _rank_models(_extract_model_ids(body), provider, limit)
 
@@ -1120,24 +1085,37 @@ def list_models(provider_id: str | None = None, *, key: str | None = None,
 def status_lines() -> list[str]:
     """Human-readable status block (owner-facing, plain text)."""
     provider = active_provider()
-    lines = [f"Provider: {provider.label}"]
-    lines.append(f"Model: {active_model_label()}")
+    lines = [i18n.t("ai.status.provider", label=provider.label)]
+    lines.append(i18n.t("ai.status.model", model=active_model_label()))
     if provider.kind == "codex":
         from services import codex_service
-        lines.append(f"Codex CLI: {'found' if codex_service.is_available() else 'NOT found'}"
-                     f" · login: {'yes' if codex_service.is_logged_in() else 'no/unknown'}")
+        lines.append(i18n.t(
+            "ai.status.codex",
+            cli=i18n.t("ai.status.found") if codex_service.is_available()
+            else i18n.t("ai.status.not_found"),
+            login=i18n.t("ai.status.yes") if codex_service.is_logged_in()
+            else i18n.t("ai.status.no_unknown"),
+        ))
     elif provider.key_required or provider.id == "custom":
         source = key_source(provider.id)
-        origin = {"env": " (from .env)", "db": " (saved in Telegram)", "none": ""}[source]
-        lines.append(f"API key: {masked_active_key(provider.id)}{origin}")
+        origin = {"env": i18n.t("ai.status.from_env"),
+                  "db": i18n.t("ai.status.in_telegram"),
+                  "none": ""}[source]
+        lines.append(i18n.t("ai.status.api_key",
+                            masked=masked_active_key(provider.id), origin=origin))
         if provider.id == "custom":
-            lines.append(f"Base URL: {active_base_url() or '(not set)'}")
+            lines.append(i18n.t("ai.status.base_url",
+                                url=active_base_url() or i18n.t("ai.not_set")))
     else:
-        lines.append(f"Endpoint: {active_base_url() or '(not set)'}")
+        lines.append(i18n.t("ai.status.endpoint",
+                            url=active_base_url() or i18n.t("ai.not_set")))
         if key_source(provider.id) != "none":
-            lines.append(f"API key: {masked_active_key(provider.id)} (optional here)")
-    lines.append(f"Embeddings: {'yes' if supports_embeddings() else 'no (keyword search only)'}")
-    lines.append(f"Cost: {cost_label(provider)}")
+            lines.append(i18n.t("ai.status.api_key_optional",
+                                masked=masked_active_key(provider.id)))
+    lines.append(i18n.t("ai.status.embeddings",
+                        state=i18n.t("ai.status.yes") if supports_embeddings()
+                        else i18n.t("ai.status.keyword_only")))
+    lines.append(i18n.t("ai.status.cost", cost=cost_label(provider)))
     return lines
 
 
@@ -1145,15 +1123,15 @@ def cost_label(provider=None) -> str:
     """One-line cost summary: free tier, free local model, or paid credit."""
     provider = provider or active_provider()
     if provider.local:
-        return "free — runs on your own machine 💻"
+        return i18n.t("ai.cost.local")
     if not provider.key_required:
-        return "free — no API key needed 🆓"
+        return i18n.t("ai.cost.no_key")
     if provider.free_tier:
-        return "free tier available 🆓" + (
-            " (paid credit needed beyond it)" if providers.needs_credit(provider.id) else "")
+        return i18n.t("ai.cost.free_tier") + (
+            i18n.t("ai.cost.beyond") if providers.needs_credit(provider.id) else "")
     if providers.needs_credit(provider.id):
-        return "paid — the account needs credit 💳"
-    return "depends on your endpoint"
+        return i18n.t("ai.cost.paid")
+    return i18n.t("ai.cost.endpoint")
 
 
 # Backwards-compatible no-op: the SDK client cache no longer exists.

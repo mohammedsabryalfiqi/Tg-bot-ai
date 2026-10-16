@@ -27,6 +27,7 @@ import threading
 import time
 
 import database
+import i18n
 import utils
 
 log = logging.getLogger("smartel.security")
@@ -48,19 +49,14 @@ _notice_lock = threading.Lock()
 _last_notice: dict[int, float] = {}
 _NOTICE_COOLDOWN_SECONDS = 600
 
-NON_OWNER_NOTICE = (
-    "👋 This is a <b>managed Telegram Business assistant</b>. It does not chat "
-    "directly here.\n\n"
-    "To reach the business, please message them through their Telegram Business "
-    "profile. The owner connects this bot via <b>Telegram Settings → Business → "
-    "Chatbots</b>."
-)
+# Kept as thin accessors so older imports (and tests) keep working; the text
+# itself lives in the i18n catalogs and follows the owner's language choice.
+def NON_OWNER_NOTICE() -> str:      # noqa: N802 - historical constant name
+    return i18n.t("sec.non_owner_notice")
 
-CLAIM_NOTICE = (
-    "🔐 This assistant is not activated yet.\n\n"
-    "If you are the owner, open the terminal where the bot is running and send: "
-    "<code>/start &lt;claim-code&gt;</code> with the code printed there."
-)
+
+def CLAIM_NOTICE() -> str:          # noqa: N802 - historical constant name
+    return i18n.t("sec.claim_notice")
 
 
 def init(bot, owner_id: int | None = None, claim_code: str | None = None) -> None:
@@ -236,7 +232,7 @@ def handle_claim(message) -> None:
             _failed_claims.append(time.time())
             log.info("claim attempt from uid=%s rejected", utils.mask_id(uid))
             try:
-                _bot.send_message(message.chat.id, CLAIM_NOTICE, parse_mode="HTML")
+                _bot.send_message(message.chat.id, CLAIM_NOTICE(), parse_mode="HTML")
             except Exception:
                 log.debug("could not send the claim notice", exc_info=True)
             return
@@ -248,10 +244,7 @@ def handle_claim(message) -> None:
     try:
         _bot.send_message(
             message.chat.id,
-            "✅ <b>You are now the owner of this assistant.</b>\n\n"
-            "Next: /setup walks you through connecting it to your Telegram Business "
-            "account, /ai picks the AI provider, /faq adds your answers, /mode chooses "
-            "how replies are sent.",
+            i18n.t("sec.claimed"),
             parse_mode="HTML",
         )
     except Exception:
@@ -287,7 +280,7 @@ def owner_only_callback(handler):
         user = getattr(call, "from_user", None)
         if not user or tenant_for_user(user.id) is None:
             try:
-                _bot.answer_callback_query(call.id, "Not authorized.", show_alert=True)
+                _bot.answer_callback_query(call.id, i18n.t("sec.not_authorized"), show_alert=True)
             except Exception:
                 pass
             return None
@@ -310,7 +303,7 @@ def handle_non_owner_dm(message) -> None:
         _last_notice[uid] = now
     log.info("non-owner DM from uid=%s", utils.mask_id(uid))
     try:
-        _bot.send_message(message.chat.id, NON_OWNER_NOTICE, parse_mode="HTML")
+        _bot.send_message(message.chat.id, NON_OWNER_NOTICE(), parse_mode="HTML")
     except Exception:
         log.debug("could not send non-owner notice", exc_info=True)
     # public_direct_bot_chat_enabled is a safety flag: when False (default) the

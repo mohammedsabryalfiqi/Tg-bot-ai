@@ -52,6 +52,12 @@ The bot token comes from **@BotFather**.
   HTML-safe message sending, update de-duplication and burst batching.
 - 🧭 **Guided setup** (`/setup`) with a live checklist, plus a **claim code** so you
   can go from "bot token" to a working assistant without looking up your user id.
+- 🇪🇬 **Arabic-first interface**: every screen, button and notification is Arabic by
+  default (`/language ar|en` switches, `/language` alone shows the picker) — and the
+  replies the bot writes for you are Arabic unless the sender writes in another
+  language.
+- 💬 **Direct messages work without Telegram Business**: people who message the bot
+  itself get an AI reply (`/direct on|off`, on by default).
 
 ### Normal bot vs. Business managed bot
 
@@ -62,8 +68,19 @@ The bot token comes from **@BotFather**.
 | Update types | `message` | `business_connection`, `business_message`, `edited_business_message`, `deleted_business_messages` |
 | Replies | from the bot | **from your business account** (via `business_connection_id`) |
 
-If a non-owner messages the SmarTel bot **directly**, it simply explains that it is
-a managed assistant — it does not chat there.
+### Two ways it can reply
+
+| | Direct messages (`/direct`) | Telegram Business |
+| --- | --- | --- |
+| Who it answers | Anyone who messages **the bot** | Customers who message **your account** |
+| Needs Telegram Business / Premium | **no** | yes (+ Secretary mode in BotFather) |
+| Replies come from | the bot | **your business account** |
+| Switch | `/direct on\|off` (on by default) | connect it in Telegram Business → Chat Bots |
+
+With `/direct off` the bot goes back to only explaining that it is a managed
+assistant. Both paths share the same pipeline: FAQ / knowledge base grounding,
+mode (`auto` / `draft` / `off`), approvals, per-chat pause & takeover, rate limit,
+memory and statistics.
 
 ---
 
@@ -195,6 +212,8 @@ watch the reply arrive from your own account. `/health` checks everything,
 | `/freeai` (`/freeproviders`) | Free providers only — no credit card, no balance |
 | `/aitest` · `/aimodel <name>` | Test the connection · set any model |
 | `/mode [auto\|draft\|off]` | How replies are sent |
+| `/direct [on\|off]` | Answer private messages sent to the bot itself (no Telegram Business) |
+| `/language [ar\|en]` | Interface language (Arabic by default) — also re-publishes the command menu |
 | `/faq` (`/qa`) | Quick-answers menu (`/faq_add`, `/faq_list`, `/faq_del`, `/faq_search`, `/faq_import`, `/faq_export`, `/faq_clear`) |
 | `/kb` | Knowledge base (`/kb_add`, `/kb_upload`, `/kb_list`, `/kb_search`, `/kb_delete`, `/kb_clear`) |
 | `/settings` | All settings (grouped screens) |
@@ -370,6 +389,10 @@ AI_API_KEY=                        # or GEMINI_API_KEY / GROQ_API_KEY /
                                    # (pollinations, ollama, lmstudio need no key)
 AI_MODEL=                          # empty ⇒ the provider's default model
 AI_BASE_URL=                       # required for `custom`, useful for local models
+
+BOT_LANGUAGE=ar                    # interface language: ar (default) | en.
+                                   # Hard override; /language stores the choice
+                                   # in the database instead.
 
 SMARTEL_FERNET_KEY=                # encrypts stored API keys (optional, recommended)
 DEFAULT_MODEL=gpt-4.1-mini         # seeds the settings table on first run

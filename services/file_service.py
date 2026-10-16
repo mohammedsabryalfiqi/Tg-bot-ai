@@ -11,6 +11,8 @@ import logging
 import re
 from pathlib import Path
 
+import i18n
+
 log = logging.getLogger("smartel.file")
 
 ALLOWED_EXTENSIONS = {".txt", ".md", ".pdf", ".docx"}
@@ -58,12 +60,16 @@ def is_allowed(filename: str) -> bool:
 def save_upload(data: bytes, original_filename: str) -> Path:
     if not is_allowed(original_filename):
         raise FileServiceError(
-            f"Unsupported file type. Allowed: {', '.join(sorted(ALLOWED_EXTENSIONS))}"
+            i18n.t("file.err.unsupported", allowed=", ".join(sorted(ALLOWED_EXTENSIONS)),
+                   default=f"Unsupported file type. Allowed: "
+                           f"{', '.join(sorted(ALLOWED_EXTENSIONS))}")
         )
     if data is None or len(data) == 0:
-        raise FileServiceError("The file is empty.")
+        raise FileServiceError(i18n.t("file.err.empty", default="The file is empty."))
     if len(data) > MAX_FILE_BYTES:
-        raise FileServiceError(f"File too large (max {MAX_FILE_BYTES // (1024 * 1024)} MB).")
+        raise FileServiceError(i18n.t(
+                "file.err.too_large", mb=MAX_FILE_BYTES // (1024 * 1024),
+                default=f"File too large (max {MAX_FILE_BYTES // (1024 * 1024)} MB)."))
 
     safe = sanitize_filename(original_filename)
     digest = hashlib.sha256(data).hexdigest()[:16]
@@ -84,18 +90,21 @@ def extract_text(path: Path) -> str:
         elif suffix == ".docx":
             text = _extract_docx(path)
         else:
-            raise FileServiceError(f"Unsupported file type: {suffix}")
+            raise FileServiceError(i18n.t("file.err.unsupported_type", suffix=suffix,
+                                           default=f"Unsupported file type: {suffix}"))
     except FileServiceError:
         raise
     except Exception as e:
         log.warning("extraction failed for %s: %s", path.name, type(e).__name__)
-        raise FileServiceError(f"Could not read '{path.name}' (unsupported or corrupt).") from e
+        raise FileServiceError(i18n.t(
+            "file.err.unreadable", name=path.name,
+            default=f"Could not read '{path.name}' (unsupported or corrupt).")) from e
 
     if not text or not text.strip():
-        raise FileServiceError(
-            f"No readable text found in '{path.name}'. "
-            "Scanned/image-only PDFs are not supported (no OCR)."
-        )
+        raise FileServiceError(i18n.t(
+            "file.err.no_text", name=path.name,
+            default=f"No readable text found in '{path.name}'. "
+                    "Scanned/image-only PDFs are not supported (no OCR)."))
     return text
 
 

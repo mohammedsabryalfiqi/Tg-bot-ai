@@ -12,6 +12,7 @@ import logging
 
 import database
 import handlers
+import i18n
 import keyboards
 import security
 import telegram_api
@@ -41,10 +42,14 @@ def register(bot, cfg) -> None:
     # Legacy OpenAI-era commands now route to the provider-agnostic /ai screen.
     cmd(["connect_openai"])(cmd_connect_openai)
     cmd(["disconnect_openai"])(cmd_disconnect_openai)
-    cmd(["auto_on"])(lambda m: _set_toggle(m, "auto_reply_enabled", True, "Automatic replies"))
-    cmd(["auto_off"])(lambda m: _set_toggle(m, "auto_reply_enabled", False, "Automatic replies"))
-    cmd(["approval_on"])(lambda m: _set_toggle(m, "approval_mode_enabled", True, "Approval mode"))
-    cmd(["approval_off"])(lambda m: _set_toggle(m, "approval_mode_enabled", False, "Approval mode"))
+    cmd(["auto_on"])(lambda m: _set_toggle(m, "auto_reply_enabled", True,
+                                           i18n.t("own.label.auto")))
+    cmd(["auto_off"])(lambda m: _set_toggle(m, "auto_reply_enabled", False,
+                                            i18n.t("own.label.auto")))
+    cmd(["approval_on"])(lambda m: _set_toggle(m, "approval_mode_enabled", True,
+                                               i18n.t("own.label.approval")))
+    cmd(["approval_off"])(lambda m: _set_toggle(m, "approval_mode_enabled", False,
+                                                i18n.t("own.label.approval")))
     cmd(["memory_clear"])(cmd_memory_clear)
     cmd(["pause_chat"])(cmd_pause_chat)
     cmd(["resume_chat"])(cmd_resume_chat)
@@ -53,6 +58,8 @@ def register(bot, cfg) -> None:
     cmd(["instructions"])(cmd_instructions)
     cmd(["setup"])(cmd_setup)
     cmd(["connections"])(cmd_connections)
+    cmd(["direct"])(cmd_direct)
+    cmd(["language", "lang"])(cmd_language)
 
     # The primary owner alone controls delegated administrator accounts.
     bot.message_handler(commands=["admin"], func=security.is_primary_admin_msg)(
@@ -102,17 +109,15 @@ def cmd_admin(message) -> None:
     """
     parts = _args(message).split()
     if not parts:
-        handlers.bot.send_message(
-            message.chat.id,
-            "Usage: <code>/admin &lt;user_id&gt;</code> to add, "
-            "<code>/admin remove &lt;user_id&gt;</code> to remove, or "
-            "<code>/admin list</code>.",
-        )
+        handlers.bot.send_message(message.chat.id, i18n.t("own.admin.usage"))
         return
     if parts[0].lower() == "list" and len(parts) == 1:
         admins = database.list_assistant_admins()
-        body = "\n".join(f"• <code>{uid}</code>" for uid in admins) or "(none)"
-        handlers.bot.send_message(message.chat.id, "Delegated admins:\n" + body)
+        body = ("\n".join(f"• <code>{uid}</code>" for uid in admins)
+                or i18n.t("own.admin.list_none"))
+        handlers.bot.send_message(
+            message.chat.id, i18n.t("own.admin.list_title") + "\n" + body
+        )
         return
     remove = parts[0].lower() == "remove"
     raw_id = parts[1] if remove and len(parts) == 2 else (parts[0] if len(parts) == 1 else "")
@@ -121,21 +126,21 @@ def cmd_admin(message) -> None:
         if user_id <= 0:
             raise ValueError
     except ValueError:
-        handlers.bot.send_message(message.chat.id, "Send a positive numeric Telegram user ID.")
+        handlers.bot.send_message(message.chat.id, i18n.t("own.admin.bad_id"))
         return
     if remove and (security.is_owner(user_id) or security.is_primary_admin(user_id)):
-        handlers.bot.send_message(message.chat.id, "The primary owner cannot be removed as a delegated admin.")
+        handlers.bot.send_message(message.chat.id, i18n.t("own.admin.primary_kept"))
         return
     changed = (database.remove_assistant_admin(user_id) if remove
                else database.add_assistant_admin(user_id))
-    verb = "removed" if remove else "added"
+    verb = i18n.t("own.admin.removed") if remove else i18n.t("own.admin.added")
     if not changed:
-        handlers.bot.send_message(message.chat.id, f"Admin <code>{user_id}</code> was not {verb}.")
+        handlers.bot.send_message(
+            message.chat.id, i18n.t("own.admin.not_changed", user_id=user_id, verb=verb)
+        )
         return
     handlers.bot.send_message(
-        message.chat.id,
-        f"✅ Admin <code>{user_id}</code> {verb}. They must connect their own "
-        "Telegram Business account before managing its assistant.",
+        message.chat.id, i18n.t("own.admin.changed", user_id=user_id, verb=verb)
     )
 
 
@@ -151,10 +156,13 @@ def _current_mode() -> str:
 def cmd_start(message) -> None:
     handlers.bot.send_message(
         message.chat.id,
-        "👋 <b>Alfiqi Ai — Telegram Business assistant</b>\n\n"
-        f"Mode: <b>{_current_mode()}</b> · AI: <b>{utils.escape(ai_service.backend_label())}</b> "
-        f"({'ready ✅' if ai_service.is_ready() else 'not configured ⚠️ — open /ai'})\n\n"
-        "Setup in three taps: /setup · /ai · /faq",
+        i18n.t(
+            "own.start",
+            mode=_current_mode(),
+            backend=utils.escape(ai_service.backend_label()),
+            ai_state=i18n.t("own.ai.ready") if ai_service.is_ready()
+            else i18n.t("own.ai.not_ready"),
+        ),
         parse_mode="HTML",
         reply_markup=keyboards.control_panel(
             database.get_bool("auto_reply_enabled"),
@@ -164,47 +172,13 @@ def cmd_start(message) -> None:
     )
 
 
-HELP_TEXT = (
-    "🤖 <b>Alfiqi Ai — Telegram Business assistant</b>\n\n"
-    "The bot answers your customers from your own Telegram Business account. "
-    "Customers never talk to it directly — they message you, it replies as you.\n\n"
-    "<b>First-time setup</b>\n"
-    "1. @BotFather → /mybots → your bot → Bot Settings → <b>Business Mode</b> "
-    "(some versions: Secretary Mode) → Turn on.\n"
-    "2. Telegram → <b>Settings → Telegram Business → Chatbots</b> → paste the bot's "
-    "@username → allow it <b>to reply to messages</b> → choose chats → save.\n"
-    "3. Here: /ai to choose the AI, /faq to add answers, /mode to switch mode.\n"
-    "Guided version of all this: /setup\n\n"
-    "<b>Everyday commands</b>\n"
-    "/mode — auto-reply · draft (approve first) · off\n"
-    "/status — full status\n"
-    "/health — run checks (token, AI, connection, storage)\n"
-    "/chats — recent customer chats · /chat &lt;id&gt; — transcript\n"
-    "/reply &lt;chat_id&gt; &lt;text&gt; — send a message yourself\n"
-    "/takeover &lt;id&gt; · /handback &lt;id&gt; — stop / resume the AI for one chat\n"
-    "/pause_chat &lt;id&gt; · /resume_chat &lt;id&gt; — the same for any paused chat\n"
-    "/stats — customers, messages, AI replies\n"
-    "/export — backup file (settings + quick answers)\n\n"
-    "<b>AI setup</b>\n"
-    "/ai — provider, API key, model, test · /aitest — quick test\n"
-    "/freeai — providers that cost nothing (no credit card, no balance)\n"
-    "/aimodel &lt;name&gt; — set a model · /instructions — standing instructions\n\n"
-    "<b>Answers</b>\n"
-    "/faq — quick answers menu (exact replies, sent instantly)\n"
-    "/faq_add trigger1, trigger2 :: the exact reply\n"
-    "/kb — knowledge base menu · /kb_add · /kb_upload · /kb_search · /kb_list\n\n"
-    "<b>Panel & housekeeping</b>\n"
-    "/start — control panel · /settings — all settings\n"
-    "/approval_on · /approval_off · /auto_on · /auto_off\n"
-    "/memory_clear — forget conversations · /reset — cancel approvals & pauses\n"
-    "/cancel — abort a pending prompt\n\n"
-    "<i>Owner takeover:</i> whenever you reply to a customer yourself (from the app "
-    "or with /reply), the bot pauses that chat automatically for a while."
-)
+def help_text() -> str:
+    """The full usage guide (localised)."""
+    return i18n.t("own.help")
 
 
 def cmd_help(message) -> None:
-    handlers.bot.send_message(message.chat.id, HELP_TEXT, parse_mode="HTML")
+    handlers.bot.send_message(message.chat.id, help_text(), parse_mode="HTML")
 
 
 def cmd_status(message) -> None:
@@ -215,37 +189,53 @@ def _status_text() -> str:
     st = business_service.get_status()
     mode = _current_mode()
     provider = ai_service.active_provider()
-    lines = ["📊 <b>Status</b>", ""]
-    lines.append(f"Reply mode: <b>{mode}</b>")
-    lines.append(f"Auto-reply switch: <b>{'ON' if st['auto_reply_enabled'] else 'OFF'}</b> · "
-                 f"Approval: <b>{'ON' if st['approval_mode_enabled'] else 'OFF'}</b>")
-    lines.append(f"AI: <b>{'ready ✅' if ai_service.is_ready() else 'not configured ⚠️'}</b>")
+    lines = [i18n.t("own.status.title"), ""]
+    lines.append(i18n.t("own.status.reply_mode", mode=mode))
+    lines.append(i18n.t(
+        "own.status.switches",
+        auto="ON" if st["auto_reply_enabled"] else "OFF",
+        approval="ON" if st["approval_mode_enabled"] else "OFF",
+    ))
+    lines.append(i18n.t(
+        "own.status.ai",
+        state=i18n.t("own.ai.ready") if ai_service.is_ready()
+        else i18n.t("own.ai.not_ready_short"),
+    ))
     for line in ai_service.status_lines():
         lines.append(f"   {utils.escape(line)}")
     if provider.key_url and not ai_service.has_api_key(provider.id) and provider.key_required:
-        lines.append(f"   Get a key: {utils.escape(provider.key_url)}")
+        lines.append(i18n.t("own.status.key_url", url=utils.escape(provider.key_url)))
     if not ai_service.is_ready() or providers.needs_credit(provider.id):
-        lines.append("   💡 /freeai — AI providers that need no credit card or balance.")
+        lines.append(i18n.t("own.status.freeai_hint"))
+    lines.append("")
+    lines.append(i18n.t(
+        "own.status.direct",
+        state=i18n.t("own.status.direct_on") if st["direct_reply_enabled"]
+        else i18n.t("own.status.direct_off"),
+    ))
+    lines.append(i18n.t("own.status.direct_hint"))
     lines.append("")
     conns = st["connections"]
     if not conns:
-        lines.append("Business connections: <b>none</b> — connect the bot in "
-                     "Telegram → Settings → Business → Chatbots.")
+        lines.append(i18n.t("own.status.conn_none"))
     else:
-        lines.append(f"Business connections: <b>{len(conns)}</b>")
+        lines.append(i18n.t("own.status.conn_count", count=len(conns)))
         for c in conns:
-            lines.append(
-                f"  • owner <code>{utils.escape(c['business_user_id'])}</code> · "
-                f"{'enabled' if c['is_enabled'] else 'disabled'} · "
-                f"{'can reply' if c['can_reply'] else 'read-only ⚠️'}"
-            )
+            lines.append(i18n.t(
+                "own.status.conn_row",
+                owner=utils.escape(c["business_user_id"]),
+                state=i18n.t("own.status.conn_enabled") if c["is_enabled"]
+                else i18n.t("own.status.conn_disabled"),
+                reply=i18n.t("own.status.conn_can_reply") if c["can_reply"]
+                else i18n.t("own.status.conn_read_only"),
+            ))
     lines.append("")
-    lines.append(f"Paused chats: <b>{st['paused_count']}</b>")
-    lines.append(f"Pending approvals: <b>{st['pending_approvals']}</b>")
-    lines.append(f"Knowledge base: <b>{st['kb']['items']}</b> items / {st['kb']['chunks']} chunks")
-    lines.append(f"Quick answers: <b>{faq_service.count()}</b>")
+    lines.append(i18n.t("own.status.paused", count=st["paused_count"]))
+    lines.append(i18n.t("own.status.pending", count=st["pending_approvals"]))
+    lines.append(i18n.t("own.status.kb", items=st["kb"]["items"], chunks=st["kb"]["chunks"]))
+    lines.append(i18n.t("own.status.faq", count=faq_service.count()))
     lines.append("")
-    lines.append("<i>Run /health for a full check.</i>")
+    lines.append(i18n.t("own.status.health_hint"))
     return "\n".join(lines)
 
 
@@ -259,22 +249,67 @@ def cmd_setup(message) -> None:
     setup_guide.send_checklist(message.chat.id)
 
 
+def cmd_direct(message) -> None:
+    """Toggle answering the private messages people send to the bot itself."""
+    from handlers import owner_tools
+    arg = _args(message).lower()
+    if arg in ("on", "off"):
+        database.set_setting("direct_reply_enabled", arg == "on")
+    elif arg not in ("", "status"):
+        state = i18n.t("own.direct.on_word") if database.get_bool("direct_reply_enabled") \
+            else i18n.t("own.direct.off_word")
+        return handlers.bot.send_message(
+            message.chat.id, i18n.t("own.direct.usage", state=state), parse_mode="HTML")
+
+    enabled = database.get_bool("direct_reply_enabled")
+    text = i18n.t("own.direct.on" if enabled else "own.direct.off")
+    text += i18n.t("own.direct.now", mode=owner_tools.current_mode())
+    text += i18n.t("own.direct.hint",
+                   opposite=i18n.t("own.direct.off_word") if enabled
+                   else i18n.t("own.direct.on_word"),
+                   command="off" if enabled else "on")
+    handlers.bot.send_message(message.chat.id, text, parse_mode="HTML")
+
+
+def cmd_language(message) -> None:
+    """Show/switch the interface language (Arabic by default)."""
+    arg = _args(message).lower()
+    if arg in i18n.LANGUAGES:
+        code = i18n.set_language(arg)
+        _republish_commands()
+        return handlers.bot.send_message(
+            message.chat.id, i18n.t("own.language.title",
+                                    label=i18n.LANGUAGES[code]),
+            parse_mode="HTML", reply_markup=keyboards.language_menu(code))
+    current = i18n.language()
+    handlers.bot.send_message(
+        message.chat.id, i18n.t("own.language.title", label=i18n.LANGUAGES[current]),
+        parse_mode="HTML", reply_markup=keyboards.language_menu(current))
+
+
+def _republish_commands() -> None:
+    """Re-publish the Telegram command menu after a language change."""
+    try:
+        import main
+        main.set_bot_commands(handlers.bot)
+    except Exception:
+        log.debug("could not re-publish bot commands", exc_info=True)
+
+
 def cmd_connections(message) -> None:
     conns = database.list_business_connections()
     if not conns:
-        return handlers.bot.send_message(
-            message.chat.id,
-            "No business connection yet.\n\n"
-            "Telegram → Settings → Telegram Business → Chatbots → add this bot → "
-            "allow it to reply. Full guide: /setup",
-        )
-    lines = ["🔗 <b>Business connections</b>", ""]
+        return handlers.bot.send_message(message.chat.id, i18n.t("own.connections.none"))
+    lines = [i18n.t("own.connections.title"), ""]
     for c in conns:
-        lines.append(f"• ID <code>{utils.escape(c['business_connection_id'])}</code>")
-        lines.append(f"  owner: <code>{utils.escape(c['business_user_id'])}</code>")
-        lines.append(f"  enabled: <b>{bool(c['is_enabled'])}</b> · "
-                     f"can reply: <b>{bool(c['can_reply'])}</b>")
-        lines.append(f"  updated: {utils.escape(c['updated_at'])}")
+        lines.append(i18n.t("own.connections.row_id",
+                            id=utils.escape(c["business_connection_id"])))
+        lines.append(i18n.t("own.connections.row_owner",
+                            owner=utils.escape(c["business_user_id"])))
+        lines.append(i18n.t("own.connections.row_state",
+                            enabled=bool(c["is_enabled"]), can_reply=bool(c["can_reply"])))
+        lines.append(i18n.t("own.connections.row_updated",
+                            updated=utils.escape(c["updated_at"])))
     handlers.bot.send_message(message.chat.id, "\n".join(lines), parse_mode="HTML")
 
 
@@ -292,8 +327,7 @@ def cmd_disconnect_openai(message) -> None:
     ai_service.disconnect_api_key(provider.id)
     handlers.bot.send_message(
         message.chat.id,
-        f"{utils.escape(provider.label)} key removed. AI replies are off until you add "
-        "a key again with /ai.",
+        i18n.t("own.key_removed", provider=utils.escape(provider.label)),
         parse_mode="HTML",
     )
 
@@ -303,13 +337,13 @@ def _set_toggle(message, key: str, value: bool, label: str) -> None:
     mode = _current_mode()
     handlers.bot.send_message(
         message.chat.id,
-        f"{label}: <b>{'ON' if value else 'OFF'}</b>\nReply mode: <b>{mode}</b>",
+        i18n.t("own.toggle", label=label, state="ON" if value else "OFF", mode=mode),
         parse_mode="HTML",
     )
 
 
 def cmd_memory_clear(message) -> None:
-    handlers.bot.send_message(message.chat.id, "Clear <b>all</b> conversation memory?",
+    handlers.bot.send_message(message.chat.id, i18n.t("own.mem_clear_ask"),
                               parse_mode="HTML", reply_markup=keyboards.confirm("memclear"))
 
 
@@ -317,7 +351,7 @@ def cmd_pause_chat(message) -> None:
     raw = _args(message)
     if not raw:
         database.set_owner_pending_input(security.operator_id(), "pause_chat", {}, 10)
-        return handlers.bot.send_message(message.chat.id, "Send the customer chat ID to pause, or /cancel.")
+        return handlers.bot.send_message(message.chat.id, i18n.t("own.pause.ask"))
     _do_pause(message.chat.id, raw, pause=True)
 
 
@@ -325,22 +359,21 @@ def cmd_resume_chat(message) -> None:
     raw = _args(message)
     if not raw:
         database.set_owner_pending_input(security.operator_id(), "resume_chat", {}, 10)
-        return handlers.bot.send_message(message.chat.id, "Send the customer chat ID to resume, or /cancel.")
+        return handlers.bot.send_message(message.chat.id, i18n.t("own.resume.ask"))
     _do_pause(message.chat.id, raw, pause=False)
 
 
 def cmd_reset(message) -> None:
     handlers.bot.send_message(
         message.chat.id,
-        "Reset transient state? This cancels all <b>pending approvals</b>, clears "
-        "<b>pauses</b>, and clears any pending input. Settings, KB and history are kept.",
+        i18n.t("own.reset_ask"),
         parse_mode="HTML", reply_markup=keyboards.confirm("reset"),
     )
 
 
 def cmd_cancel(message) -> None:
     database.clear_owner_pending_input(security.operator_id())
-    handlers.bot.send_message(message.chat.id, "Cancelled. ✖")
+    handlers.bot.send_message(message.chat.id, i18n.t("own.cancelled"))
 
 
 def cmd_instructions(message) -> None:
@@ -351,25 +384,16 @@ def cmd_instructions(message) -> None:
     arg = _args(message)
     if not arg:
         current = database.get_str("custom_instructions")
-        shown = utils.escape(current) if current else "<i>(none)</i>"
+        shown = utils.escape(current) if current else i18n.t("own.instructions.none")
         return handlers.bot.send_message(
             message.chat.id,
-            "📝 <b>Custom instructions</b> — always added to the AI's system prompt "
-            "(applies to every reply, on every provider):\n\n"
-            f"{shown}\n\n"
-            "Set:   <code>/instructions &lt;text&gt;</code>\n"
-            "Example: <code>/instructions Always reply in Egyptian Arabic, keep it short.</code>\n"
-            "Clear: <code>/instructions clear</code>\n\n"
-            "<i>Tip: language, tone and persona also have their own rows in /settings → "
-            "Persona.</i>",
+            i18n.t("own.instructions.title", current=shown),
             parse_mode="HTML")
     if arg.strip().lower() == "clear":
         database.set_setting("custom_instructions", "")
-        return handlers.bot.send_message(message.chat.id, "Custom instructions cleared. ✖")
+        return handlers.bot.send_message(message.chat.id, i18n.t("own.instructions.cleared"))
     database.set_setting("custom_instructions", arg)
-    handlers.bot.send_message(
-        message.chat.id,
-        "✅ Custom instructions updated. They'll be applied to every reply from now on.")
+    handlers.bot.send_message(message.chat.id, i18n.t("own.instructions.updated"))
 
 
 # =============================================================================
@@ -379,19 +403,17 @@ def _do_pause(chat_id: int, raw: str, pause: bool) -> None:
     try:
         customer_chat_id = int(raw)
     except ValueError:
-        return handlers.bot.send_message(chat_id, f"'{raw}' is not a valid chat ID.")
+        return handlers.bot.send_message(chat_id, i18n.t("own.pause.bad_id", raw=raw))
     bcid = business_service.find_bcid_for_chat(customer_chat_id)
     if bcid is None:
-        return handlers.bot.send_message(
-            chat_id, "Couldn't determine the business connection for that chat "
-                     "(no messages seen yet, or multiple connections).")
+        return handlers.bot.send_message(chat_id, i18n.t("own.pause.no_connection"))
     if pause:
         business_service.pause_chat(bcid, customer_chat_id, reason="manual_pause", minutes=None)
-        handlers.bot.send_message(chat_id, f"⏸ Paused chat <code>{customer_chat_id}</code>.",
+        handlers.bot.send_message(chat_id, i18n.t("own.pause.paused", chat_id=customer_chat_id),
                                   parse_mode="HTML")
     else:
         ok = business_service.resume_chat(bcid, customer_chat_id)
-        msg = "▶️ Resumed" if ok else "Chat was not paused"
+        msg = i18n.t("own.pause.resumed") if ok else i18n.t("own.pause.not_paused")
         handlers.bot.send_message(chat_id, f"{msg} <code>{customer_chat_id}</code>.", parse_mode="HTML")
 
 
@@ -407,13 +429,13 @@ def on_panel_callback(call) -> None:
         bot.send_message(call.message.chat.id, _status_text(), parse_mode="HTML")
         return telegram_api.answer_callback(bot, call.id)
     if action == "help":
-        bot.send_message(call.message.chat.id, HELP_TEXT, parse_mode="HTML")
+        bot.send_message(call.message.chat.id, help_text(), parse_mode="HTML")
         return telegram_api.answer_callback(bot, call.id)
     if action == "pending":
         bot.send_message(call.message.chat.id, approvals.render_pending_list(), parse_mode="HTML")
         return telegram_api.answer_callback(bot, call.id)
     if action == "mem_clear":
-        bot.send_message(call.message.chat.id, "Clear all conversation memory?",
+        bot.send_message(call.message.chat.id, i18n.t("own.mem_clear_ask_plain"),
                          reply_markup=keyboards.confirm("memclear"))
         return telegram_api.answer_callback(bot, call.id)
     if action == "mode":
@@ -424,16 +446,17 @@ def on_panel_callback(call) -> None:
             )
         except Exception:
             pass
-        return telegram_api.answer_callback(bot, call.id, "Choose the reply mode")
+        return telegram_api.answer_callback(bot, call.id, i18n.t("own.panel.choose_mode"))
     if action == "mode_set":
         from handlers import owner_tools
         new_mode = owner_tools.set_mode(parts[2] if len(parts) > 2 else "off")
         _refresh_panel(call)
-        return telegram_api.answer_callback(bot, call.id, f"Mode: {new_mode}")
+        return telegram_api.answer_callback(
+            bot, call.id, i18n.t("own.panel.mode_set", mode=new_mode))
     if action == "home":
         try:
             bot.edit_message_text(
-                "👋 <b>Control panel</b>", call.message.chat.id, call.message.message_id,
+                i18n.t("own.panel.home"), call.message.chat.id, call.message.message_id,
                 parse_mode="HTML", reply_markup=keyboards.control_panel(
                     database.get_bool("auto_reply_enabled"),
                     database.get_bool("approval_mode_enabled"),
@@ -447,8 +470,11 @@ def on_panel_callback(call) -> None:
         new_value = not database.get_bool(key)
         database.set_setting(key, new_value)
         _refresh_panel(call)
-        label = "Auto-reply" if action == "auto_toggle" else "Approval mode"
-        return telegram_api.answer_callback(bot, call.id, f"{label} {'ON' if new_value else 'OFF'}")
+        label = i18n.t("own.label.auto") if action == "auto_toggle" \
+            else i18n.t("own.label.approval")
+        return telegram_api.answer_callback(
+            bot, call.id,
+            i18n.t("own.panel.toggle", label=label, state="ON" if new_value else "OFF"))
     telegram_api.answer_callback(bot, call.id)
 
 
@@ -477,29 +503,29 @@ def on_confirm_callback(call) -> None:
 
     if decision != "yes":
         _strip(call)
-        return telegram_api.answer_callback(bot, call.id, "Cancelled.")
+        return telegram_api.answer_callback(bot, call.id, i18n.t("own.confirm.cancelled"))
 
     if token == "kbclear":
         from services import kb_service
         kb_service.clear_all()
-        result = "Knowledge base cleared."
+        result = i18n.t("own.confirm.kb_cleared")
     elif token == "faqclear":
         removed = faq_service.clear()
-        result = f"Quick answers cleared ({removed} entries)."
+        result = i18n.t("own.confirm.faq_cleared", count=removed)
     elif token == "aidisconnect":
         provider = ai_service.active_provider()
         ai_service.disconnect_api_key(provider.id)
-        result = f"{provider.label} key removed."
+        result = i18n.t("own.confirm.key_removed", provider=provider.label)
     elif token == "memclear":
         n = memory_service.clear_all()
-        result = f"Cleared conversation memory ({n} rows)."
+        result = i18n.t("own.confirm.mem_cleared", count=n)
     elif token == "reset":
         result = _do_reset_transient()
     else:
-        result = "Done."
+        result = i18n.t("own.confirm.done")
 
     _strip(call, result)
-    telegram_api.answer_callback(bot, call.id, "Done ✅")
+    telegram_api.answer_callback(bot, call.id, i18n.t("own.confirm.done_ok"))
 
 
 def _do_reset_transient() -> str:
@@ -509,7 +535,7 @@ def _do_reset_transient() -> str:
         database.clear_owner_pending_input(security.operator_id())
     from services import batching
     batching.batcher.reset()
-    return f"Reset done: {cancelled} approval(s) cancelled, {paused} pause(s) cleared."
+    return i18n.t("own.confirm.reset", cancelled=cancelled, paused=paused)
 
 
 def _strip(call, new_text: str | None = None) -> None:
@@ -549,8 +575,6 @@ def apply_pending_pause(message, kind: str, context: dict) -> None:
 # =============================================================================
 def on_fallback(message) -> None:
     if security.is_operator_msg(message):
-        handlers.bot.send_message(message.chat.id,
-                                  "I didn't recognise that. Use /start for the control panel "
-                                  "or /help for commands.")
+        handlers.bot.send_message(message.chat.id, i18n.t("own.fallback"))
     else:
         security.handle_non_owner_dm(message)
