@@ -8,8 +8,6 @@ this module pins.
 
 from __future__ import annotations
 
-import pytest
-
 from services import gate_service
 
 
@@ -172,3 +170,11 @@ def test_summary_reports_both_gates(db):
     assert data["subscription_on"] is True and data["channels"] == 1
     assert data["payments_on"] is False           # no price typed yet
     assert gate_service.summary_lines()
+
+
+def test_the_last_free_message_warns_about_the_price(db):
+    db.set_setting("paid_messages_enabled", True)
+    db.set_setting("paid_message_stars", 40)
+    db.set_setting("paid_message_free_count", 1)
+    notice = gate_service.free_last_notice()
+    assert "40" in notice and "last free" in notice

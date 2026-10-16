@@ -1308,6 +1308,8 @@ STRINGS: dict[str, str] = {
     "gate.invoice.default_title": "رسالة مدفوعة",
     "gate.invoice.desc": "رسالتك هتوصل لـ {name} أول ما تيليجرام يأكّد الدفع ({stars} نجمة).",
     "gate.invoice.label": "رسالة",
+    "gate.user.free_last": "🎁 دي كانت آخر رسالة مجانية — من هنا ورايح كل رسالة بـ {stars} نجمة.",
+    "gate.refunded_local": "الاسترجاع اتسجّل هنا، بس تيليجرام رفض استرجاع النجوم — راجع رصيد البوت.",
     # ==== append-below ====    # ==== append-below ===='''
     # =========================================================================
     # services/providers.py — registry texts (ar)

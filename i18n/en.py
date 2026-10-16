@@ -1376,24 +1376,25 @@ STRINGS: dict[str, str] = {
     "gate.status.earned": "Paid: <b>{count}</b> · stars: <b>{stars}</b>",
     # --- what the visitor sees ---
     "gate.user.sub": (
-        "🔒 قبل ما أقدر أرد عليك، لازم تشترك في القنوات/الجروبات دي:\n\n{list}\n\n"
-        "بعد ما تشترك اضغط ✅ تحقّق."
+        "🔒 Before I can answer you, please join these channels/groups:\n\n{list}\n\n"
+        "Once you have, tap ✅ Check my subscription."
     ),
-    "gate.user.sub_ok": "✅ تمام، اشتراكك متأكد. ابعت رسالتك تاني 👇",
-    "gate.user.still_missing": "لسه مشتركش في:\n{list}",
+    "gate.user.sub_ok": "✅ Thanks — your subscription is confirmed. Send your message again 👇",
+    "gate.user.still_missing": "Still not joined:\n{list}",
     "gate.user.pay": (
-        "⭐ الرسالة دي بـ {stars} نجمة.\n"
-        "اضغط الزرار تحت لدفع {stars} نجمة، وبعد الدفع هبعت رسالتك في الحال."
+        "⭐ This message costs {stars} stars.\n"
+        "Tap the button below to pay {stars} stars — I will send your message "
+        "as soon as the payment goes through."
     ),
-    "gate.user.free": "🎁 فاضل لك {left} رسالة مجانية.",
-    "gate.pay.expired": "الفاتورة دي انتهت — ابعت رسالتك تاني.",
-    "gate.pay.done": "✅ الدفع تم! بقرا رسالتك دلوقتي…",
-    "gate.pay.failed": "⚠️ الدفع مكملش. جرّب تاني.",
+    "gate.user.free": "🎁 You have {left} free message(s) left.",
+    "gate.pay.expired": "That invoice has expired — please send your message again.",
+    "gate.pay.done": "✅ Payment received! Reading your message now…",
+    "gate.pay.failed": "⚠️ The payment was not completed. Please try again.",
     "gate.owner.copy": (
-        "⭐ <b>رسالة مدفوعة ({stars} نجمة)</b>\n"
-        "من: <b>{name}</b> (المحادثة <code>{chat_id}</code>)\n\n"
-        "<b>الرسالة:</b>\n<i>{text}</i>\n\n"
-        "<b>الرد:</b>\n{reply}"
+        "⭐ <b>Paid message ({stars} stars)</b>\n"
+        "From: <b>{name}</b> (chat <code>{chat_id}</code>)\n\n"
+        "<b>Message:</b>\n<i>{text}</i>\n\n"
+        "<b>Reply:</b>\n{reply}"
     ),
     "kbd.gate.stars_toggle": "⭐ Turn paid messages on/off",
     "kbd.gate.price": "💲 Set the price (stars)",
@@ -1445,6 +1446,8 @@ STRINGS: dict[str, str] = {
     "gate.invoice.default_title": "Paid message",
     "gate.invoice.desc": "Your message is delivered to {name} once Telegram confirms the payment ({stars} star).",
     "gate.invoice.label": "Message of the day",
+    "gate.user.free_last": "🎁 That was your last free message — from now on each message costs {stars} stars.",
+    "gate.refunded_local": "Refund recorded here, but Telegram refused the star refund — check the bot's balance.",
     # ==== append-below ====    # ==== append-below ====    # ==== append-below ====
 
     # =========================================================================

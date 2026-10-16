@@ -215,3 +215,28 @@ def test_every_literal_key_used_in_the_code_exists():
                 missing.append(f"{path.name}: {key}")
 
     assert missing == []
+
+
+# Keys whose *English* text legitimately contains Arabic characters (example
+# triggers, the language picker's own labels, wording that mentions Arabic).
+# Anything else appearing here means a translation was pasted into the wrong
+# catalog, which is invisible to the parity tests.
+ARABIC_ALLOWED_IN_ENGLISH = {
+    "faq.add.step1",
+    "faq.menu.example",
+    "main.cmd.language",
+    "own.help",
+    "set.lang.ar",
+    "set.lang.fa",
+    "set.lang.ur",
+    "setup.step.content.body",
+}
+
+
+def test_english_catalog_is_actually_english():
+    english = i18n.catalog("en")
+    arabic_in_english = {
+        key for key, value in english.items()
+        if any("\u0600" <= ch <= "\u06ff" for ch in value)
+    }
+    assert arabic_in_english == ARABIC_ALLOWED_IN_ENGLISH

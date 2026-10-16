@@ -35,6 +35,7 @@ class Recorder:
         self.callbacks: list[tuple] = []      # (callback_id, text, show_alert)
         self.deleted: list[tuple] = []
         self.edits: list[tuple] = []
+        self.edits_full: list[tuple] = []     # (text, chat_id, message_id, kwargs)
 
     def send_message(self, chat_id, text, **kwargs):
         self.messages.append((chat_id, text, kwargs))
@@ -50,6 +51,7 @@ class Recorder:
 
     def edit_message_text(self, text, chat_id, message_id, **kwargs):
         self.edits.append((text, chat_id, message_id))
+        self.edits_full.append((text, chat_id, message_id, kwargs))
         return True
 
     def edit_message_reply_markup(self, chat_id, message_id, reply_markup=None):
@@ -690,3 +692,152 @@ def test_gate_and_rules_owner_screens_render(wired_owned):
     wired_owned.rec.messages.clear()
     wired_owned.bot.process_new_updates([_dm("/unanswered", update_id=632)])
     assert wired_owned.rec.texts(OWNER_ID)
+
+
+def test_gate_price_is_typed_by_the_admin_and_then_charged(wired_owned, monkeypatch):
+    """The star price is never preset: the admin types it in /gate."""
+    monkeypatch.setattr("telegram_api.send_star_invoice",
+                        lambda chat_id, **kw: {"message_id": 1})
+    monkeypatch.setattr("services.ai_service.is_ready", lambda: True)
+
+    wired_owned.bot.process_new_updates([_callback("gate:price", update_id=640)])
+    wired_owned.bot.process_new_updates([_dm("50", update_id=641)])
+
+    assert wired_owned.db.get_int("paid_message_stars") == 50
+    assert wired_owned.db.get_bool("paid_messages_enabled") is True
+    assert any("50" in text for text in wired_owned.rec.texts(OWNER_ID))
+
+    # ... and the next customer message is invoiced at that price.
+    invoices: list[dict] = []
+    monkeypatch.setattr("telegram_api.send_star_invoice",
+                        lambda chat_id, **kw: invoices.append(kw) or {"message_id": 1})
+    _rules_env(wired_owned, monkeypatch)
+    wired_owned.bot.process_new_updates([_direct_message("عايز أطلب", update_id=642)])
+    assert [invoice["stars"] for invoice in invoices] == [50]
+
+
+def test_gate_price_rejects_junk(wired_owned):
+    wired_owned.bot.process_new_updates([_callback("gate:price", update_id=650)])
+    wired_owned.bot.process_new_updates([_dm("مش رقم", update_id=651)])
+    assert wired_owned.db.get_int("paid_message_stars") == 0
+    assert any("digits" in text for text in wired_owned.rec.texts(OWNER_ID))
+
+
+def test_adding_a_required_channel_from_the_gate_screen(wired_owned, monkeypatch):
+    monkeypatch.setattr("telegram_api.get_chat",
+                        lambda ref: {"title": "قناتي الرسمية", "type": "channel"})
+    wired_owned.db.set_setting("require_subscription_enabled", True)
+
+    wired_owned.bot.process_new_updates([_callback("gate:add_channel", update_id=660)])
+    wired_owned.bot.process_new_updates([_dm("@mychannel", update_id=661)])
+
+    rows = wired_owned.db.list_required_channels()
+    assert [row["chat_ref"] for row in rows] == ["@mychannel"]
+    assert rows[0]["title"] == "قناتي الرسمية"
+
+    # The verify button re-checks membership (bypassing the cache) and answers.
+    monkeypatch.setattr("services.gate_service.telegram_api.get_chat_member",
+                        lambda ref, user: {"status": "member"})
+    wired_owned.rec.callbacks.clear()
+    wired_owned.bot.process_new_updates([_callback("gate:verify", user_id=4242,
+                                                   chat_id=4242, update_id=662)])
+    assert any("subscription is confirmed" in (text or "")
+               for _cb, text, _alert in wired_owned.rec.callbacks)
+
+
+def test_resources_add_accepts_a_typed_link(wired_owned, monkeypatch):
+    monkeypatch.setattr("services.resource_service.fetch_text",
+                        lambda url: ("صفحة الأسعار", "الأسعار: 500 جنيه، والتوصيل خلال يومين داخل دمياط."))
+
+    wired_owned.bot.process_new_updates([_callback("res:add", update_id=670)])
+    wired_owned.bot.process_new_updates([_dm("https://shop.example.com/prices", update_id=671)])
+
+    rows = wired_owned.db.list_resources()
+    assert len(rows) == 1 and rows[0]["kind"] == "link"
+    assert rows[0]["url"] == "https://shop.example.com/prices"
+    assert wired_owned.db.list_kb_items()             # fetched into the knowledge base
+
+    # The reference reaches the model as approved context.
+    from services import prompt_service
+    assert "shop.example.com/prices" in prompt_service.build_system_prompt()
+
+
+def test_rule_edit_replaces_the_draft(wired_owned, monkeypatch):
+    monkeypatch.setattr("services.ai_service.is_ready", lambda: False)
+    wired_owned.bot.process_new_updates([_dm("/rules_add قاعدة قديمة", update_id=680)])
+    batch = wired_owned.db.list_topic_rules(enabled_only=False)[0]["batch"]
+
+    wired_owned.bot.process_new_updates([_callback(f"rule:edit:{batch}", update_id=681)])
+    wired_owned.bot.process_new_updates([_dm("قاعدة جديدة", update_id=682)])
+
+    rules = wired_owned.db.list_topic_rules(enabled_only=False)
+    assert [row["rule"] for row in rules] == ["قاعدة جديدة"]
+    assert rules[0]["batch"] != batch
+
+
+def test_unanswered_ignore_clears_the_card(wired_owned, monkeypatch):
+    _rules_env(wired_owned, monkeypatch, reply="NO_ANSWER")
+    wired_owned.bot.process_new_updates([_direct_message("سؤال غريب")])
+    question_id = wired_owned.db.list_unanswered("open")[0]["id"]
+
+    wired_owned.bot.process_new_updates([_callback(f"unans:ignore:{question_id}",
+                                                   update_id=690)])
+
+    assert wired_owned.db.count_unanswered("open") == 0
+    assert wired_owned.db.count_unanswered("ignored") == 1
+
+
+def test_settings_toggle_switches_the_new_features_off(wired_owned):
+    wired_owned.bot.process_new_updates([_callback("set:toggle:rules_enabled",
+                                                   update_id=695)])
+    assert wired_owned.db.get_bool("rules_enabled") is False
+
+    wired_owned.bot.process_new_updates([_callback("set:group:gate", update_id=696)])
+    rendered = " ".join(text for text, _chat, _mid, _kw in wired_owned.rec.edits_full)
+    assert "Entry gates" in rendered
+    gate_buttons = [b for _t, _c, _m, kw in wired_owned.rec.edits_full
+                    if kw.get("reply_markup")
+                    for b in _buttons(kw["reply_markup"])]
+    assert any(key in data for _text, data in gate_buttons
+               for key in ("require_subscription_enabled", "paid_messages_enabled"))
+
+
+def test_the_first_free_message_warns_before_the_gate_closes(wired_owned, monkeypatch):
+    wired_owned.db.set_setting("paid_messages_enabled", True)
+    wired_owned.db.set_setting("paid_message_stars", 40)
+    wired_owned.db.set_setting("paid_message_free_count", 1)
+    _rules_env(wired_owned, monkeypatch)
+
+    # First message: free, answered, and the person is told what comes next.
+    wired_owned.bot.process_new_updates([_direct_message("مرحبا", update_id=710,
+                                                         message_id=710)])
+    assert "تمام 👌" in wired_owned.rec.texts(4242)
+    assert any("40" in text and "free" in text for text in wired_owned.rec.texts(4242))
+    assert wired_owned.db.count_paid_messages(free=True) == 1
+
+    # Second message: now it costs stars, so it is invoiced and held.
+    invoices: list[dict] = []
+    monkeypatch.setattr("telegram_api.send_star_invoice",
+                        lambda chat_id, **kw: invoices.append(kw) or {"message_id": 9})
+    wired_owned.rec.messages.clear()
+    wired_owned.bot.process_new_updates([_direct_message("تاني", update_id=711,
+                                                         message_id=711)])
+    assert [invoice["stars"] for invoice in invoices] == [40]
+    assert not any("تمام 👌" in text for text in wired_owned.rec.texts(4242))
+
+
+def test_refunding_marks_the_payment_and_talks_to_telegram(wired_owned, monkeypatch):
+    calls: list[tuple] = []
+    monkeypatch.setattr("telegram_api.refund_star_payment",
+                        lambda user_id, charge_id: calls.append((user_id, charge_id)) or True)
+
+    payload = "pm:4242:abc123"
+    wired_owned.db.create_paid_message(4242, 4242, payload, 30, "رسالة مدفوعة")
+    wired_owned.db.mark_paid_message_paid(payload, "ch_7")
+    paid_id = wired_owned.db.get_paid_message_by_payload(payload)["id"]
+
+    wired_owned.bot.process_new_updates([_callback(f"gate:refund:{paid_id}",
+                                                   update_id=720)])
+
+    assert calls == [(4242, "ch_7")]
+    assert wired_owned.db.get_paid_message(paid_id)["status"] == "refunded"

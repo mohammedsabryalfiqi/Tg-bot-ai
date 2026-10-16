@@ -255,6 +255,13 @@ def _entry_gates(bcid: str, chat_id: int, user_id, message, text: str):
         left = gate_service.free_left(user_id)
         if left > 0:
             gate_service.park_message(user_id, chat_id, text, free=True)
+            if left == 1:
+                # Last free message: say so once, so the next invoice is no
+                # surprise. Best effort — never block the reply.
+                try:
+                    handlers.bot.send_message(chat_id, gate_service.free_last_notice())
+                except Exception:
+                    log.debug("could not send the last-free-message notice", exc_info=True)
             return {"kind": "free", "stars": 0, "left": left - 1}
         return None
 

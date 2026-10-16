@@ -1722,6 +1722,13 @@ def create_paid_message(customer_chat_id: int, user_id: int | None, payload: str
         return int(cur.lastrowid)
 
 
+def get_paid_message(message_id: int):
+    with read_cursor() as cur:
+        cur.execute("SELECT * FROM paid_messages WHERE id=? AND tenant_id=?",
+                    (int(message_id), tenant_id()))
+        return cur.fetchone()
+
+
 def get_paid_message_by_payload(payload: str):
     with read_cursor() as cur:
         cur.execute("SELECT * FROM paid_messages WHERE payload=? AND tenant_id=? "

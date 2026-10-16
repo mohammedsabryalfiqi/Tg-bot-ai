@@ -212,6 +212,11 @@ def free_left(user_id: int) -> int:
     return max(0, quota - used)
 
 
+def free_last_notice(stars: int | None = None) -> str:
+    """Localised "that was your last free message" notice."""
+    return i18n.t("gate.user.free_last", stars=stars if stars is not None else stars_price())
+
+
 def payment_required(user_id: int) -> bool:
     if not payments_enabled():
         return False
@@ -228,7 +233,7 @@ def park_message(user_id: int, chat_id: int, text: str, *, stars: int | None = N
     """Store the message until the payment lands (or record a free use)."""
     payload = new_payload(user_id)
     amount = 0 if free else int(stars if stars is not None else stars_price())
-    message_id = database.create_paid_message(
+    database.create_paid_message(
         chat_id, user_id, payload, amount, text,
         status="pending" if not free else "free",
     )

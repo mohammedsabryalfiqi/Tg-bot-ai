@@ -24,7 +24,7 @@ import keyboards
 import security
 import telegram_api
 import utils
-from services import faq_service, rules_service
+from services import rules_service
 
 log = logging.getLogger("smartel.unanswered_handler")
 

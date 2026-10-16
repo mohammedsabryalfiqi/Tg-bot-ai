@@ -49,7 +49,12 @@ def register(bot, cfg) -> None:
 
     cmd(["gate", "gates", "subscribe"], cmd_menu)
 
-    @bot.callback_query_handler(func=lambda c: c.data and c.data.startswith("gate:"))
+    # Owner-facing screens. `gate:verify` is pressed by *visitors* and is
+    # handled below — TeleBot runs only the first matching handler, so it must
+    # not match here (the owner check would swallow it).
+    @bot.callback_query_handler(
+        func=lambda c: bool(c.data) and c.data.startswith("gate:")
+        and c.data != "gate:verify")
     @security.owner_only_callback
     def _gate_cb(call):
         _safe(lambda: on_callback(call))
@@ -89,7 +94,6 @@ def _args(message) -> str:
 # Menu
 # =============================================================================
 def menu_text() -> str:
-    stats = gate_service.summary()
     lines = [i18n.t("gate.title"), "", i18n.t("gate.body"), ""]
     lines += gate_service.summary_lines()
     lines += ["", i18n.t("gate.hint")]
@@ -199,10 +203,17 @@ def on_callback(call) -> None:
                              keyboards.required_channels(database.list_required_channels()))
 
     if action == "refund" and argument.isdigit():
-        if database.set_paid_message_status(int(argument), "refunded"):
-            telegram_api.answer_callback(bot, call.id, i18n.t("gate.refunded"))
-        else:
-            telegram_api.answer_callback(bot, call.id, i18n.t("gate.refund_missing"))
+        row = database.get_paid_message(int(argument))
+        if row is None:
+            return telegram_api.answer_callback(bot, call.id, i18n.t("gate.refund_missing"),
+                                                show_alert=True)
+        sent = telegram_api.refund_star_payment(row["user_id"] or row["customer_chat_id"],
+                                               row["charge_id"] or "")
+        database.set_paid_message_status(int(argument), "refunded")
+        telegram_api.answer_callback(
+            bot, call.id,
+            i18n.t("gate.refunded") if sent else i18n.t("gate.refunded_local"),
+            show_alert=not sent)
         return
 
     if action == "close":
@@ -282,8 +293,12 @@ def on_verify(call) -> None:
     """The visitor says they joined: re-check (bypassing the cache) and answer."""
     user_id = getattr(getattr(call, "from_user", None), "id", None)
     bot = handlers.bot
-    if not user_id or not gate_service.subscription_enabled():
+    if not user_id:
         return telegram_api.answer_callback(bot, call.id)
+    if not gate_service.subscription_enabled():
+        # Nothing to check (the gate was switched off meanwhile): say it is fine
+        # rather than leaving the visitor staring at a dead button.
+        return telegram_api.answer_callback(bot, call.id, i18n.t("gate.user.sub_ok"))
     missing = gate_service.missing_channels(user_id, force=True)
     if not missing:
         telegram_api.answer_callback(bot, call.id, i18n.t("gate.user.sub_ok"))

@@ -264,6 +264,17 @@ def send_star_invoice(chat_id, *, title: str, description: str, payload: str, st
         return None
 
 
+def refund_star_payment(user_id: int, charge_id: str) -> bool:
+    """Refund a Stars payment (the bot must be the one that received it)."""
+    try:
+        _post("refundStarPayment",
+              {"user_id": int(user_id), "telegram_payment_charge_id": charge_id})
+        return True
+    except TelegramAPIError as e:
+        log.warning("refundStarPayment failed: %s", e.description)
+        return False
+
+
 def answer_pre_checkout_query(query_id: str, ok: bool, error_message: str | None = None) -> bool:
     """Approve/decline a Stars payment before it is charged."""
     data = {"pre_checkout_query_id": query_id, "ok": ok}
