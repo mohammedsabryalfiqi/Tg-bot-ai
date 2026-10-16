@@ -44,6 +44,23 @@ DEFAULT_WELCOME_TEXT = (
 )
 
 
+def _tenant_for_connection_id(bcid: str | None) -> int | None:
+    import security
+    if not bcid:
+        return None
+    conn = business_service.get_connection(bcid)
+    if conn is None or conn["business_user_id"] is None:
+        return None
+    uid = int(conn["business_user_id"])
+    if (database.is_assistant_admin(uid) and not security.is_owner(uid)
+            and not security.is_primary_admin(uid)):
+        return uid
+    if (database.multi_admin_enabled() and not security.is_owner(uid)
+            and not security.is_primary_admin(uid)):
+        return None
+    return 0
+
+
 def register(bot, cfg) -> None:
     @bot.business_connection_handler()
     def _on_business_connection(bc):
@@ -62,14 +79,20 @@ def register(bot, cfg) -> None:
     @bot.edited_business_message_handler(content_types=_CONTENT_TYPES)
     def _on_edited_business_message(message):
         try:
-            on_edited_business_message(message)
+            tenant = _tenant_for_connection_id(getattr(message, "business_connection_id", None))
+            if tenant is not None:
+                with database.tenant_scope(tenant):
+                    on_edited_business_message(message)
         except Exception:
             log.exception("edited_business_message handler failed")
 
     @bot.deleted_business_messages_handler()
     def _on_deleted_business_messages(deleted):
         try:
-            on_deleted_business_messages(deleted)
+            tenant = _tenant_for_connection_id(getattr(deleted, "business_connection_id", None))
+            if tenant is not None:
+                with database.tenant_scope(tenant):
+                    on_deleted_business_messages(deleted)
         except Exception:
             log.exception("deleted_business_messages handler failed")
 
@@ -78,11 +101,25 @@ def register(bot, cfg) -> None:
 # Connection updates
 # =============================================================================
 def on_business_connection(bc) -> None:
+    import security
+    user_id = getattr(getattr(bc, "user", None), "id", None)
+    if user_id is None:
+        log.warning("Business connection update without account user id")
+        return
+    if (bool(getattr(bc, "is_enabled", True)) and database.multi_admin_enabled()
+            and not security.is_owner(user_id)
+            and not security.is_primary_admin(user_id)
+            and not database.is_assistant_admin(user_id)):
+        log.warning("rejecting unassigned account while multi-admin mode is active")
+        return
     business_service.upsert_connection(bc)
     is_enabled = bool(getattr(bc, "is_enabled", True))
     can_reply = business_service.resolve_can_reply(bc)
+    notify = ((lambda text: handlers.bot.send_message(user_id, text))
+              if database.is_assistant_admin(user_id) or security.is_primary_admin(user_id)
+              else handlers.notify_owner)
     if is_enabled:
-        handlers.notify_owner(
+        notify(
             "🔗 <b>Business connection enabled.</b>\n"
             f"Owner account ID: <code>{utils.escape(getattr(getattr(bc, 'user', None), 'id', '?'))}</code>\n"
             f"Bot can reply: <b>{'yes' if can_reply else 'no'}</b>\n\n"
@@ -90,19 +127,43 @@ def on_business_connection(bc) -> None:
             "Use /status any time."
         )
         if not can_reply:
-            handlers.notify_owner(
+            notify(
                 "⚠️ This connection does <b>not</b> grant reply permission, so the "
                 "bot can read but not send. Enable replies for the bot in your "
                 "Telegram Business → Chatbots settings."
             )
     else:
-        handlers.notify_owner("🔌 <b>Business connection disabled or removed.</b>")
+        notify("🔌 <b>Business connection disabled or removed.</b>")
 
 
 # =============================================================================
 # Customer message pipeline
 # =============================================================================
 def process_business_message(message) -> None:
+    """Route each accepted Business update into its owner's isolated tenant."""
+    import security
+    bcid = getattr(message, "business_connection_id", None)
+    conn = business_service.get_connection(bcid) if bcid else None
+    if conn is None:
+        return
+    account_id = conn["business_user_id"]
+    if account_id is None:
+        return
+    if (database.multi_admin_enabled() and not security.is_owner(account_id)
+            and not security.is_primary_admin(account_id)
+            and not database.is_assistant_admin(account_id)):
+        log.warning("message from unassigned account ignored while multi-admin mode is active")
+        return
+    # Existing primary-owner connections keep their legacy profile. Delegated
+    # admins always get a separate database and cannot inherit the owner's data.
+    tenant = (account_id if database.is_assistant_admin(account_id)
+              and not security.is_owner(account_id)
+              and not security.is_primary_admin(account_id) else 0)
+    with database.tenant_scope(tenant):
+        _process_business_message_scoped(message)
+
+
+def _process_business_message_scoped(message) -> None:
     bcid = getattr(message, "business_connection_id", None)
     if not bcid:
         log.warning("business_message without business_connection_id; ignoring")

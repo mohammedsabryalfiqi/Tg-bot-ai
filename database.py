@@ -10,6 +10,7 @@ readers proceed alongside the single writer).
 from __future__ import annotations
 
 import contextlib
+import contextvars
 import json
 import logging
 import sqlite3
@@ -25,6 +26,25 @@ _local = threading.local()
 _WRITE_LOCK = threading.Lock()
 _DB_PATH: Path | None = None
 _SEED_DEFAULTS: dict[str, object] = {}
+_ACTIVE_TENANT = contextvars.ContextVar("active_tenant", default=0)
+
+
+def tenant_id() -> int:
+    return int(_ACTIVE_TENANT.get() or 0)
+
+
+@contextlib.contextmanager
+def tenant_scope(value: int | None):
+    token = _ACTIVE_TENANT.set(int(value or 0))
+    try:
+        yield
+    finally:
+        _ACTIVE_TENANT.reset(token)
+
+
+def _setting_key(key: str) -> str:
+    tenant = tenant_id()
+    return f"tenant:{tenant}:{key}" if tenant else key
 
 
 # =============================================================================
@@ -50,6 +70,8 @@ SETTINGS_SCHEMA: dict[str, tuple[type, object]] = {
     # Free-text instruction always added to the AI system prompt (language, tone,
     # persona). Empty by default. Set via /instructions.
     "custom_instructions": (str, ""),
+    "reply_priorities": (str, ""),
+    "never_reply_rules": (str, ""),
 
     # --- AI provider layer (see services/ai_service.py) -----------------------
     # Which provider generates replies: openai | anthropic | google | groq |
@@ -102,6 +124,15 @@ def init_db(cfg) -> int:
     review.
     """
     global _DB_PATH, _SEED_DEFAULTS
+    # Drop handles from a previous init (unit tests may re-init the same path).
+    for old in getattr(_local, "connections", {}).values():
+        try:
+            old.close()
+        except Exception:
+            pass
+    _local.connections = {}
+    if hasattr(_local, "conn"):
+        del _local.conn
     _DB_PATH = Path(cfg.db_path)
     _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     Path(cfg.uploads_dir).mkdir(parents=True, exist_ok=True)
@@ -123,15 +154,29 @@ def init_db(cfg) -> int:
 def _get_conn() -> sqlite3.Connection:
     if _DB_PATH is None:
         raise RuntimeError("Database not initialised. Call init_db(cfg) first.")
-    conn = getattr(_local, "conn", None)
+    tenant = tenant_id()
+    path = _DB_PATH if tenant == 0 else _DB_PATH.with_name(
+        f"{_DB_PATH.stem}.tenant-{tenant}{_DB_PATH.suffix or '.sqlite3'}")
+    connections = getattr(_local, "connections", None)
+    if connections is None:
+        connections = {}
+        _local.connections = connections
+    key = str(path)
+    conn = connections.get(key)
     if conn is None:
-        conn = sqlite3.connect(str(_DB_PATH), timeout=5.0, check_same_thread=True)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(str(path), timeout=5.0, check_same_thread=True)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA foreign_keys=ON")
         conn.execute("PRAGMA busy_timeout=5000")
         conn.execute("PRAGMA synchronous=NORMAL")
-        _local.conn = conn
+        connections[key] = conn
+        if tenant == 0:
+            _local.conn = conn  # compatibility with existing tests/diagnostics
+        else:
+            _create_schema()
+            seed_default_settings()
     return conn
 
 
@@ -168,6 +213,12 @@ def _create_schema() -> None:
                 key        TEXT PRIMARY KEY,
                 value      TEXT,
                 updated_at TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS assistant_admins (
+                user_id INTEGER PRIMARY KEY,
+                added_at TEXT NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1
             );
 
             CREATE TABLE IF NOT EXISTS business_connections (
@@ -236,6 +287,7 @@ def _create_schema() -> None:
 
             CREATE TABLE IF NOT EXISTS kb_items (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                tenant_id   INTEGER NOT NULL DEFAULT 0,
                 title       TEXT,
                 source_type TEXT,
                 filename    TEXT,
@@ -273,6 +325,7 @@ def _create_schema() -> None:
 
             CREATE TABLE IF NOT EXISTS faq_entries (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                tenant_id   INTEGER NOT NULL DEFAULT 0,
                 keywords    TEXT NOT NULL DEFAULT '',
                 question    TEXT,
                 answer      TEXT NOT NULL DEFAULT '',
@@ -299,6 +352,14 @@ def _create_schema() -> None:
                 ON faq_entries(enabled, id);
             """
         )
+        # Upgrade databases created before per-account isolation.
+        for table in ("faq_entries", "kb_items"):
+            columns = {row["name"] for row in cur.execute(f"PRAGMA table_info({table})")}
+            if "tenant_id" not in columns:
+                cur.execute(f"ALTER TABLE {table} ADD COLUMN tenant_id INTEGER NOT NULL DEFAULT 0")
+        admin_columns = {row["name"] for row in cur.execute("PRAGMA table_info(assistant_admins)")}
+        if "enabled" not in admin_columns:
+            cur.execute("ALTER TABLE assistant_admins ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1")
 
 
 # =============================================================================
@@ -332,7 +393,7 @@ def get_setting(key: str):
     typ, default = SETTINGS_SCHEMA[key]
     default = _SEED_DEFAULTS.get(key, default)
     with read_cursor() as cur:
-        cur.execute("SELECT value FROM settings WHERE key = ?", (key,))
+        cur.execute("SELECT value FROM settings WHERE key = ?", (_setting_key(key),))
         row = cur.fetchone()
     if row is None or row["value"] is None or str(row["value"]).strip() == "":
         return default
@@ -368,8 +429,53 @@ def set_setting(key: str, value) -> None:
         cur.execute(
             "INSERT INTO settings(key, value, updated_at) VALUES(?,?,?) "
             "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
-            (key, serialized, utils.now_iso()),
+            (_setting_key(key), serialized, utils.now_iso()),
         )
+
+
+def _tenant_db_key(value: str) -> str:
+    tenant = tenant_id()
+    return f"{tenant}:{value}" if tenant else value
+
+
+def add_assistant_admin(user_id: int) -> bool:
+    with tenant_scope(0):
+        with write_tx() as cur:
+            cur.execute("INSERT INTO assistant_admins(user_id, added_at, enabled) VALUES (?,?,1) "
+                        "ON CONFLICT(user_id) DO UPDATE SET enabled=1, added_at=excluded.added_at "
+                        "WHERE assistant_admins.enabled=0",
+                        (int(user_id), utils.now_iso()))
+            return cur.rowcount > 0
+
+
+def remove_assistant_admin(user_id: int) -> bool:
+    with tenant_scope(0):
+        with write_tx() as cur:
+            cur.execute("UPDATE assistant_admins SET enabled=0 WHERE user_id=? AND enabled=1", (int(user_id),))
+            return cur.rowcount > 0
+
+
+def is_assistant_admin(user_id: int) -> bool:
+    with tenant_scope(0):
+        with read_cursor() as cur:
+            cur.execute("SELECT 1 FROM assistant_admins WHERE user_id=? AND enabled=1", (int(user_id),))
+            return cur.fetchone() is not None
+
+
+def list_assistant_admins() -> list[int]:
+    with tenant_scope(0):
+        with read_cursor() as cur:
+            cur.execute("SELECT user_id FROM assistant_admins WHERE enabled=1 ORDER BY user_id")
+            return [int(row["user_id"]) for row in cur.fetchall()]
+
+
+def multi_admin_enabled() -> bool:
+    """Permanent safety latch: once delegation is configured, unknown accounts
+    can never silently fall back to the primary owner's profile."""
+    with tenant_scope(0):
+        with read_cursor() as cur:
+            cur.execute("SELECT 1 FROM assistant_admins LIMIT 1")
+            return cur.fetchone() is not None
 
 
 def get_all_settings() -> dict[str, object]:
@@ -378,12 +484,22 @@ def get_all_settings() -> dict[str, object]:
 
 def seed_default_settings() -> None:
     now = utils.now_iso()
+    tenant = tenant_id()
+    shared_model_defaults = {}
+    if tenant:
+        # The primary admin chooses the provider/model; delegated accounts use
+        # that approved model by default but keep their own API key and content.
+        with tenant_scope(0):
+            shared_model_defaults = {
+                key: get_setting(key)
+                for key in ("ai_provider", "ai_model_by_provider", "ai_base_url")
+            }
     with write_tx() as cur:
         for key, (typ, default) in SETTINGS_SCHEMA.items():
-            value = _SEED_DEFAULTS.get(key, default)
+            value = shared_model_defaults.get(key, _SEED_DEFAULTS.get(key, default))
             cur.execute(
                 "INSERT OR IGNORE INTO settings(key, value, updated_at) VALUES(?,?,?)",
-                (key, _serialize(value, typ), now),
+                (_setting_key(key), _serialize(value, typ), now),
             )
 
 
@@ -392,45 +508,62 @@ def seed_default_settings() -> None:
 # =============================================================================
 def upsert_business_connection(business_connection_id: str, business_user_id: int | None,
                                is_enabled: bool, can_reply: bool) -> None:
-    now = utils.now_iso()
-    with write_tx() as cur:
-        cur.execute(
-            """
-            INSERT INTO business_connections
-                (business_connection_id, business_user_id, is_enabled, can_reply, created_at, updated_at)
-            VALUES (?,?,?,?,?,?)
-            ON CONFLICT(business_connection_id) DO UPDATE SET
-                business_user_id = excluded.business_user_id,
-                is_enabled       = excluded.is_enabled,
-                can_reply        = excluded.can_reply,
-                updated_at       = excluded.updated_at
-            """,
-            (business_connection_id, business_user_id, 1 if is_enabled else 0,
-             1 if can_reply else 0, now, now),
-        )
+    with tenant_scope(0):
+        now = utils.now_iso()
+        with write_tx() as cur:
+            cur.execute(
+                """
+                INSERT INTO business_connections
+                    (business_connection_id, business_user_id, is_enabled, can_reply, created_at, updated_at)
+                VALUES (?,?,?,?,?,?)
+                ON CONFLICT(business_connection_id) DO UPDATE SET
+                    business_user_id = excluded.business_user_id,
+                    is_enabled       = excluded.is_enabled,
+                    can_reply        = excluded.can_reply,
+                    updated_at       = excluded.updated_at
+                """,
+                (business_connection_id, business_user_id, 1 if is_enabled else 0,
+                 1 if can_reply else 0, now, now),
+            )
 
 
 def get_business_connection(business_connection_id: str) -> sqlite3.Row | None:
-    with read_cursor() as cur:
-        cur.execute(
-            "SELECT * FROM business_connections WHERE business_connection_id = ?",
-            (business_connection_id,),
-        )
-        return cur.fetchone()
+    with tenant_scope(0):
+        with read_cursor() as cur:
+            cur.execute(
+                "SELECT * FROM business_connections WHERE business_connection_id = ?",
+                (business_connection_id,),
+            )
+            return cur.fetchone()
+
+
+def get_business_connection_for_user(user_id: int) -> sqlite3.Row | None:
+    with tenant_scope(0):
+        with read_cursor() as cur:
+            cur.execute("SELECT * FROM business_connections WHERE business_user_id=? AND is_enabled=1 "
+                        "ORDER BY id DESC LIMIT 1", (int(user_id),))
+            return cur.fetchone()
 
 
 def set_bc_enabled(business_connection_id: str, enabled: bool) -> None:
-    with write_tx() as cur:
-        cur.execute(
-            "UPDATE business_connections SET is_enabled=?, updated_at=? WHERE business_connection_id=?",
-            (1 if enabled else 0, utils.now_iso(), business_connection_id),
-        )
+    with tenant_scope(0):
+        with write_tx() as cur:
+            cur.execute(
+                "UPDATE business_connections SET is_enabled=?, updated_at=? WHERE business_connection_id=?",
+                (1 if enabled else 0, utils.now_iso(), business_connection_id),
+            )
 
 
 def list_business_connections() -> list[sqlite3.Row]:
-    with read_cursor() as cur:
-        cur.execute("SELECT * FROM business_connections ORDER BY id")
-        return cur.fetchall()
+    requested_tenant = tenant_id()
+    with tenant_scope(0):
+        with read_cursor() as cur:
+            if requested_tenant:
+                cur.execute("SELECT * FROM business_connections WHERE business_user_id=? ORDER BY id",
+                            (requested_tenant,))
+            else:
+                cur.execute("SELECT * FROM business_connections ORDER BY id")
+            return cur.fetchall()
 
 
 # =============================================================================
@@ -623,9 +756,9 @@ def insert_faq_entry(keywords: str, answer: str, question: str = "",
     now = utils.now_iso()
     with write_tx() as cur:
         cur.execute(
-            "INSERT INTO faq_entries(keywords, question, answer, enabled, created_at, updated_at) "
-            "VALUES (?,?,?,?,?,?)",
-            (keywords, question, answer, 1 if enabled else 0, now, now),
+            "INSERT INTO faq_entries(tenant_id, keywords, question, answer, enabled, created_at, updated_at) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (tenant_id(), keywords, question, answer, 1 if enabled else 0, now, now),
         )
         return cur.lastrowid
 
@@ -651,45 +784,46 @@ def update_faq_entry(entry_id: int, *, keywords: str | None = None,
         return False
     fields.append("updated_at=?")
     params.append(utils.now_iso())
-    params.append(entry_id)
+    params.extend((entry_id, tenant_id()))
     with write_tx() as cur:
-        cur.execute(f"UPDATE faq_entries SET {', '.join(fields)} WHERE id=?", tuple(params))
+        cur.execute(f"UPDATE faq_entries SET {', '.join(fields)} WHERE id=? AND tenant_id=?", tuple(params))
         return cur.rowcount > 0
 
 
 def get_faq_entry(entry_id: int) -> sqlite3.Row | None:
     with read_cursor() as cur:
-        cur.execute("SELECT * FROM faq_entries WHERE id=?", (entry_id,))
+        cur.execute("SELECT * FROM faq_entries WHERE id=? AND tenant_id=?", (entry_id, tenant_id()))
         return cur.fetchone()
 
 
 def list_faq_entries(only_enabled: bool = False) -> list[sqlite3.Row]:
-    sql = "SELECT * FROM faq_entries"
+    sql = "SELECT * FROM faq_entries WHERE tenant_id=?"
+    params: tuple = (tenant_id(),)
     if only_enabled:
-        sql += " WHERE enabled=1"
+        sql += " AND enabled=1"
     sql += " ORDER BY id"
     with read_cursor() as cur:
-        cur.execute(sql)
+        cur.execute(sql, params)
         return cur.fetchall()
 
 
 def delete_faq_entry(entry_id: int) -> int:
     with write_tx() as cur:
-        cur.execute("DELETE FROM faq_entries WHERE id=?", (entry_id,))
+        cur.execute("DELETE FROM faq_entries WHERE id=? AND tenant_id=?", (entry_id, tenant_id()))
         return cur.rowcount
 
 
 def clear_faq() -> int:
     with write_tx() as cur:
-        cur.execute("DELETE FROM faq_entries")
+        cur.execute("DELETE FROM faq_entries WHERE tenant_id=?", (tenant_id(),))
         return cur.rowcount
 
 
 def touch_faq_hit(entry_id: int) -> None:
     with write_tx() as cur:
         cur.execute(
-            "UPDATE faq_entries SET hits = hits + 1, last_hit_at=? WHERE id=?",
-            (utils.now_iso(), entry_id),
+            "UPDATE faq_entries SET hits = hits + 1, last_hit_at=? WHERE id=? AND tenant_id=?",
+            (utils.now_iso(), entry_id, tenant_id()),
         )
 
 
@@ -697,13 +831,14 @@ def replace_faq_entries(rows: list[dict]) -> int:
     """Import helper: replace the whole FAQ set with ``rows`` (dicts with
     keywords/answer/question/enabled). Returns the number inserted."""
     with write_tx() as cur:
-        cur.execute("DELETE FROM faq_entries")
+        cur.execute("DELETE FROM faq_entries WHERE tenant_id=?", (tenant_id(),))
         now = utils.now_iso()
         for row in rows:
             cur.execute(
-                "INSERT INTO faq_entries(keywords, question, answer, enabled, created_at, updated_at) "
-                "VALUES (?,?,?,?,?,?)",
+                "INSERT INTO faq_entries(tenant_id, keywords, question, answer, enabled, created_at, updated_at) "
+                "VALUES (?,?,?,?,?,?,?)",
                 (
+                    tenant_id(),
                     str(row.get("keywords", "")).strip(),
                     str(row.get("question", "") or ""),
                     str(row.get("answer", "") or ""),
@@ -1002,40 +1137,45 @@ def cancel_all_pending_approvals() -> int:
 def insert_kb_item(title: str, source_type: str, filename: str | None) -> int:
     with write_tx() as cur:
         cur.execute(
-            "INSERT INTO kb_items(title, source_type, filename, created_at, chunk_count) "
-            "VALUES (?,?,?,?,0)",
-            (title, source_type, filename, utils.now_iso()),
+            "INSERT INTO kb_items(tenant_id, title, source_type, filename, created_at, chunk_count) "
+            "VALUES (?,?,?,?,?,0)",
+            (tenant_id(), title, source_type, filename, utils.now_iso()),
         )
         return cur.lastrowid
 
 
 def set_kb_item_chunk_count(item_id: int, chunk_count: int) -> None:
     with write_tx() as cur:
-        cur.execute("UPDATE kb_items SET chunk_count=? WHERE id=?", (chunk_count, item_id))
+        cur.execute("UPDATE kb_items SET chunk_count=? WHERE id=? AND tenant_id=?", (chunk_count, item_id, tenant_id()))
 
 
 def get_kb_item(item_id: int) -> sqlite3.Row | None:
     with read_cursor() as cur:
-        cur.execute("SELECT * FROM kb_items WHERE id=?", (item_id,))
+        cur.execute("SELECT * FROM kb_items WHERE id=? AND tenant_id=?", (item_id, tenant_id()))
         return cur.fetchone()
 
 
 def list_kb_items() -> list[sqlite3.Row]:
     with read_cursor() as cur:
-        cur.execute("SELECT * FROM kb_items ORDER BY id")
+        cur.execute("SELECT * FROM kb_items WHERE tenant_id=? ORDER BY id", (tenant_id(),))
         return cur.fetchall()
 
 
 def delete_kb_item(item_id: int) -> int:
     with write_tx() as cur:
-        cur.execute("DELETE FROM kb_items WHERE id=?", (item_id,))
+        cur.execute("DELETE FROM kb_items WHERE id=? AND tenant_id=?", (item_id, tenant_id()))
         return cur.rowcount
 
 
 def clear_kb() -> None:
     with write_tx() as cur:
-        cur.execute("DELETE FROM kb_chunks")
-        cur.execute("DELETE FROM kb_items")
+        cur.execute("DELETE FROM kb_chunks WHERE item_id IN (SELECT id FROM kb_items WHERE tenant_id=?)", (tenant_id(),))
+        cur.execute("DELETE FROM kb_items WHERE tenant_id=?", (tenant_id(),))
+
+
+def _kb_item_belongs_to_tenant(cur, item_id: int) -> bool:
+    cur.execute("SELECT 1 FROM kb_items WHERE id=? AND tenant_id=?", (item_id, tenant_id()))
+    return cur.fetchone() is not None
 
 
 def insert_kb_chunks_bulk(rows: list[tuple[int, int, str, str | None]]) -> None:
@@ -1045,19 +1185,19 @@ def insert_kb_chunks_bulk(rows: list[tuple[int, int, str, str | None]]) -> None:
         cur.executemany(
             "INSERT INTO kb_chunks(item_id, chunk_index, content, embedding_json, created_at) "
             "VALUES (?,?,?,?,?)",
-            [(r[0], r[1], r[2], r[3], now) for r in rows],
+            [(r[0], r[1], r[2], r[3], now) for r in rows if _kb_item_belongs_to_tenant(cur, r[0])],
         )
 
 
 def get_all_chunks() -> list[sqlite3.Row]:
     with read_cursor() as cur:
-        cur.execute("SELECT id, item_id, chunk_index, content, embedding_json FROM kb_chunks")
+        cur.execute("SELECT c.id, c.item_id, c.chunk_index, c.content, c.embedding_json FROM kb_chunks c JOIN kb_items i ON i.id=c.item_id WHERE i.tenant_id=?", (tenant_id(),))
         return cur.fetchall()
 
 
 def count_kb_chunks() -> int:
     with read_cursor() as cur:
-        cur.execute("SELECT COUNT(*) AS n FROM kb_chunks")
+        cur.execute("SELECT COUNT(*) AS n FROM kb_chunks c JOIN kb_items i ON i.id=c.item_id WHERE i.tenant_id=?", (tenant_id(),))
         return int(cur.fetchone()["n"])
 
 
@@ -1076,19 +1216,19 @@ def upsert_api_key(provider: str, masked_key: str, stored_key: str) -> None:
                 encrypted_key_or_plain_local_key = excluded.encrypted_key_or_plain_local_key,
                 updated_at = excluded.updated_at
             """,
-            (provider, masked_key, stored_key, now, now),
+            (_tenant_db_key(provider), masked_key, stored_key, now, now),
         )
 
 
 def get_api_key_row(provider: str) -> sqlite3.Row | None:
     with read_cursor() as cur:
-        cur.execute("SELECT * FROM api_keys WHERE provider=?", (provider,))
+        cur.execute("SELECT * FROM api_keys WHERE provider=?", (_tenant_db_key(provider),))
         return cur.fetchone()
 
 
 def delete_api_key(provider: str) -> int:
     with write_tx() as cur:
-        cur.execute("DELETE FROM api_keys WHERE provider=?", (provider,))
+        cur.execute("DELETE FROM api_keys WHERE provider=?", (_tenant_db_key(provider),))
         return cur.rowcount
 
 

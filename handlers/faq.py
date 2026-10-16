@@ -30,9 +30,9 @@ PER_PAGE = 5
 
 def register(bot, cfg) -> None:
     def cmd(commands, fn):
-        @bot.message_handler(commands=commands, func=security.is_owner_msg)
+        @bot.message_handler(commands=commands, func=security.is_operator_msg)
         def _handler(message, _fn=fn):
-            _safe(lambda: _fn(message))
+            security.run_as_operator(message, lambda: _safe(lambda: _fn(message)))
 
     cmd(["faq", "qa"], cmd_menu)
     cmd(["faq_add", "qa_add"], cmd_add)
@@ -93,7 +93,7 @@ def cmd_add(message) -> None:
     if raw and ONE_LINER_SEP in raw:
         triggers, answer = raw.split(ONE_LINER_SEP, 1)
         return _create(message.chat.id, triggers, answer)
-    database.set_owner_pending_input(security.owner_id(), "faq_keywords", {}, PENDING_TTL_MINUTES)
+    database.set_owner_pending_input(security.operator_id(), "faq_keywords", {}, PENDING_TTL_MINUTES)
     handlers.bot.send_message(
         message.chat.id,
         "➕ <b>New quick answer — step 1/2</b>\n\n"
@@ -118,7 +118,7 @@ def cmd_delete(message) -> None:
 def cmd_search(message) -> None:
     query = _args(message)
     if not query:
-        database.set_owner_pending_input(security.owner_id(), "faq_search", {}, PENDING_TTL_MINUTES)
+        database.set_owner_pending_input(security.operator_id(), "faq_search", {}, PENDING_TTL_MINUTES)
         return handlers.bot.send_message(message.chat.id, "Send a customer-like message to test, or /cancel.")
     _do_search(message.chat.id, query)
 
@@ -129,7 +129,7 @@ def cmd_clear(message) -> None:
 
 
 def cmd_import(message) -> None:
-    database.set_owner_pending_input(security.owner_id(), "faq_import", {}, PENDING_TTL_MINUTES)
+    database.set_owner_pending_input(security.operator_id(), "faq_import", {}, PENDING_TTL_MINUTES)
     handlers.bot.send_message(
         message.chat.id,
         "📥 Send the JSON file exported earlier (or /cancel).\n"
@@ -215,7 +215,7 @@ def on_callback(call) -> None:
         return telegram_api.answer_callback(bot, call.id)
 
     if action == "add":
-        database.set_owner_pending_input(security.owner_id(), "faq_keywords", {},
+        database.set_owner_pending_input(security.operator_id(), "faq_keywords", {},
                                         PENDING_TTL_MINUTES)
         telegram_api.answer_callback(bot, call.id, "Send the trigger words.")
         bot.send_message(
@@ -252,7 +252,7 @@ def on_callback(call) -> None:
                                             "Deleted ✅" if ok else "Entry not found.")
 
     if action == "search":
-        database.set_owner_pending_input(security.owner_id(), "faq_search", {},
+        database.set_owner_pending_input(security.operator_id(), "faq_search", {},
                                         PENDING_TTL_MINUTES)
         telegram_api.answer_callback(bot, call.id, "Send a test message.")
         bot.send_message(chat_id, "🔍 Send a customer-like message to test, or /cancel.")
@@ -309,7 +309,7 @@ def export_to_chat(chat_id: int) -> None:
 
 
 def apply_pending(message, kind: str, context: dict) -> None:
-    owner = security.owner_id()
+    owner = security.operator_id()
     chat_id = message.chat.id
 
     if kind == "faq_keywords":

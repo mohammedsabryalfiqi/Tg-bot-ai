@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import logging
 
+import database
+
 log = logging.getLogger("smartel.handlers")
 
 bot = None      # set via init(); the single TeleBot instance
@@ -21,7 +23,7 @@ def notify_owner(text: str, reply_markup=None) -> None:
     """Best-effort message to the bot owner (never with business_connection_id)."""
     import security
     import telegram_api
-    oid = security.owner_id()
+    oid = database.tenant_id() or security.operator_id()
     if oid is None or bot is None:
         return
     try:

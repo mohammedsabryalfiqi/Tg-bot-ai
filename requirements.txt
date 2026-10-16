@@ -2,7 +2,7 @@
 # Python 3.10+
 
 # Telegram Bot API framework with Telegram Business support (>=4.17.0 required).
-pyTelegramBotAPI>=4.17.0
+pyTelegramBotAPI>=4.37.0
 
 # NOTE: the OpenAI Python SDK is intentionally not required — chat/embeddings are
 # plain HTTP calls (services/ai_service.py), which keeps every provider (OpenAI,

@@ -12,10 +12,11 @@ from types import SimpleNamespace
 import pytest
 
 import handlers
+import security
 from handlers import settings as settings_handler
 from services import ai_service
 
-OWNER_CHAT = 12345
+OWNER_CHAT = 5231453921
 
 
 def _msg():
@@ -39,6 +40,7 @@ def _row_data() -> list[str]:
 
 @pytest.fixture
 def env(db, stub_bot):
+    security.init(stub_bot, OWNER_CHAT)
     return db
 
 

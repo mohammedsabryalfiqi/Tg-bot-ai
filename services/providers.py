@@ -12,7 +12,8 @@ Transport kinds
     This one code path covers OpenAI itself, Anthropic-compatible gateways,
     Google Gemini (its OpenAI-compatibility endpoint), Groq, OpenRouter,
     Cerebras, DeepSeek, Mistral, xAI, Together, NVIDIA, SambaNova, Hugging Face,
-    Ollama/LM Studio and any custom endpoint.
+    OmniRoute (a self-hosted multi-provider gateway), Ollama/LM Studio and any
+    custom endpoint.
 ``anthropic``
     Native Messages API (``POST {base_url}/messages``) — used for Anthropic so
     we do not depend on their OpenAI-compatibility shim being enabled.
@@ -90,18 +91,20 @@ PROVIDERS: dict[str, Provider] = {
         label="Groq (fastest)",
         kind="openai_compat",
         base_url="https://api.groq.com/openai/v1",
-        default_model="llama-3.3-70b-versatile",
-        models=("llama-3.3-70b-versatile", "llama-3.1-8b-instant", "gpt-oss-120b",
-                "gemma2-9b-it"),
+        default_model="openai/gpt-oss-120b",
+        models=("openai/gpt-oss-120b", "openai/gpt-oss-20b", "qwen/qwen3.6-27b",
+                "qwen/qwen3.8-27b"),
         key_url="https://console.groq.com/keys",
         key_prefixes=("gsk_",),
         free_tier=True,
-        free_note="Free forever with an email only: thousands of requests/day on the "
-                  "small models, ~30 requests/minute. Replies in milliseconds.",
+        free_note="Free forever with an email only: ~1,000 requests/day on the "
+                  "chat models, ~30 requests/minute. Replies in milliseconds. "
+                  "(Llama 3.3 70B was retired from the free tier on 2026-08-16; "
+                  "GPT-OSS / Qwen are the replacements.)",
         docs="Free API key from console.groq.com — sign up with an email (no credit "
              "card), open “API Keys”, create one. Very fast. Knowledge base uses "
-             "keyword search (Groq has no embeddings API). If a model name is "
-             "rejected, use “Load models” — Groq rotates its free catalogue.",
+             "keyword search (Groq has no embeddings API). Groq rotates its free "
+             "catalogue often; if a model name is rejected, use “Load models”.",
     ),
     # -------------------------------------------------------------- Cerebras ---
     "cerebras": Provider(
@@ -316,6 +319,24 @@ PROVIDERS: dict[str, Provider] = {
              "an aggregator, Cloudflare Workers AI). Send the base URL and the model "
              "name; the key is optional.",
     ),
+    # ----------------------------------------------------------- OmniRoute ---
+    "omniroute": Provider(
+        id="omniroute",
+        label="OmniRoute (self-hosted gateway)",
+        kind="openai_compat",
+        base_url="http://localhost:20128/v1",
+        default_model="auto",
+        models=("auto",),
+        key_required=False,
+        local=True,
+        free_tier=False,
+        docs="Self-hosted OpenAI-compatible gateway (github.com/diegosouzapw/"
+             "OmniRoute). No AI key is stored in the bot: OmniRoute holds the "
+             "provider accounts and routes/falls back between them. Run it on the "
+             "bot's machine (default http://localhost:20128/v1), or point the bot "
+             "elsewhere with OMNIROUTE_BASE_URL. If your OmniRoute sets "
+             "REQUIRE_API_KEY=true, send its API key (OMNIROUTE_API_KEY).",
+    ),
     # ---------------------------------------------------------------- Ollama ---
     "ollama": Provider(
         id="ollama",
@@ -374,7 +395,7 @@ PROVIDER_ORDER: tuple[str, ...] = (
     # paid / credit needed
     "openai", "anthropic", "deepseek", "xai", "together",
     # custom + local (free, but you supply the endpoint or the hardware)
-    "custom", "ollama", "lmstudio", "codex",
+    "custom", "omniroute", "ollama", "lmstudio", "codex",
 )
 
 DEFAULT_PROVIDER = "openai"
@@ -393,6 +414,7 @@ _KEY_ENV_VARS: dict[str, str] = {
     "mistral": "MISTRAL_API_KEY",
     "xai": "XAI_API_KEY",
     "together": "TOGETHER_API_KEY",
+    "omniroute": "OMNIROUTE_API_KEY",
     "cerebras": "CEREBRAS_API_KEY",
     "nvidia": "NVIDIA_API_KEY",
     "sambanova": "SAMBANOVA_API_KEY",
@@ -472,6 +494,22 @@ def supports_embeddings(provider_id: str) -> bool:
 def key_env_var(provider_id: str) -> str:
     """Environment variable that can hold this provider's key (terminal setup)."""
     return _KEY_ENV_VARS.get((provider_id or "").strip().lower(), "AI_API_KEY")
+
+
+def base_url_env_names(provider_id: str) -> list[str]:
+    """Env vars that may override a built-in ``base_url`` (self-hosted endpoints).
+
+    Public cloud providers are deliberately absent: their base URL is fixed, so a
+    typo in the environment cannot silently redirect traffic somewhere else. Only
+    local/self-hosted endpoints (whose address differs per machine) are
+    overridable -- ``custom`` has its own DB-stored URL and is handled
+    separately.
+    """
+    return {
+        "omniroute": ["OMNIROUTE_BASE_URL"],
+        "ollama": ["OLLAMA_BASE_URL"],
+        "lmstudio": ["LMSTUDIO_BASE_URL"],
+    }.get((provider_id or "").strip().lower(), [])
 
 
 # =============================================================================

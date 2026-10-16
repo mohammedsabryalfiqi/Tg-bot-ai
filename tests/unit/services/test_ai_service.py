@@ -63,7 +63,7 @@ def test_default_provider_is_openai(db):
 def test_env_provider_is_used_when_db_is_default(db, monkeypatch):
     monkeypatch.setenv("AI_PROVIDER", "groq")
     assert svc.active_provider_id() == "groq"
-    assert svc.active_model_label() == "llama-3.3-70b-versatile"
+    assert svc.active_model_label() == "openai/gpt-oss-120b"
 
 
 def test_db_setting_wins_over_env(db, monkeypatch):
@@ -92,9 +92,9 @@ def test_custom_provider_base_url_is_read_from_settings(db):
 
 def test_model_per_provider_is_remembered(db):
     svc.set_model("gpt-4o", "openai")
-    svc.set_model("llama-3.1-8b-instant", "groq")
+    svc.set_model("openai/gpt-oss-20b", "groq")
     assert svc.active_model("openai") == "gpt-4o"
-    assert svc.active_model("groq") == "llama-3.1-8b-instant"
+    assert svc.active_model("groq") == "openai/gpt-oss-20b"
     assert svc.has_explicit_model("groq") is True
     assert svc.has_explicit_model("mistral") is False
 
@@ -395,3 +395,81 @@ def test_key_env_var_mapping():
 def test_set_provider_rejects_unknown(db):
     with pytest.raises(svc.AIServiceError):
         svc.set_provider("nope")
+
+
+# --- OmniRoute (self-hosted gateway, no AI key in the bot) -------------------
+def test_omniroute_is_a_keyless_local_provider():
+    provider = providers.get("omniroute")
+    assert provider is not None
+    assert provider.kind == "openai_compat"
+    assert provider.key_required is False
+    assert provider.local is True
+    assert provider.base_url == "http://localhost:20128/v1"
+    assert provider.default_model == "auto"
+    assert "omniroute" in providers.ids()
+
+
+def test_omniroute_ready_without_any_key(db):
+    db.set_setting("ai_provider", "omniroute")
+    assert svc.is_ready() is True
+    assert svc.active_model() == "auto"
+
+
+def test_omniroute_base_url_env_override(db, monkeypatch):
+    db.set_setting("ai_provider", "omniroute")
+    assert svc.active_base_url() == "http://localhost:20128/v1"
+    monkeypatch.setenv("OMNIROUTE_BASE_URL", "http://host.docker.internal:20128/v1")
+    assert svc.active_base_url() == "http://host.docker.internal:20128/v1"
+
+
+def test_cloud_provider_base_url_is_not_env_overridable(monkeypatch):
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://evil.example/v1")
+    assert svc.active_base_url("openai") == "https://api.openai.com/v1"
+
+
+def test_omniroute_chat_sends_no_authorization_header(db, monkeypatch):
+    db.set_setting("ai_provider", "omniroute")
+    captured = {}
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        captured.update(url=url, headers=headers, payload=json)
+        return _http_ok(_openai_body("routed reply"))
+
+    monkeypatch.setattr(svc.requests, "post", fake_post)
+    out = svc.chat([{"role": "user", "content": "hello"}])
+    assert out == "routed reply"
+    assert captured["url"] == "http://localhost:20128/v1/chat/completions"
+    assert "Authorization" not in captured["headers"]
+    assert captured["payload"]["model"] == "auto"
+
+
+def test_omniroute_optional_key_is_sent_when_configured(db, monkeypatch):
+    db.set_setting("ai_provider", "omniroute")
+    monkeypatch.setenv("OMNIROUTE_API_KEY", "sk_omniroute")
+    captured = {}
+    monkeypatch.setattr(
+        svc.requests, "post",
+        lambda url, headers=None, json=None, timeout=None: (
+            captured.update(headers=headers), _http_ok(_openai_body("ok")))[1],
+    )
+    assert svc.chat([{"role": "user", "content": "hi"}]) == "ok"
+    assert captured["headers"]["Authorization"] == "Bearer sk_omniroute"
+
+
+def test_omniroute_validate_key_without_a_key(db, monkeypatch):
+    db.set_setting("ai_provider", "omniroute")
+    monkeypatch.setattr(svc.requests, "post", lambda *a, **k: _http_ok(_openai_body("ok")))
+    ok, _ = svc.validate_key("omniroute", "")
+    assert ok is True
+
+
+def test_omniroute_status_lines_show_endpoint(db):
+    db.set_setting("ai_provider", "omniroute")
+    lines = " ".join(svc.status_lines())
+    assert "http://localhost:20128/v1" in lines
+
+
+def test_base_url_env_names_only_cover_self_hosted_endpoints():
+    assert providers.base_url_env_names("omniroute") == ["OMNIROUTE_BASE_URL"]
+    assert providers.base_url_env_names("openai") == []
+    assert providers.key_env_var("omniroute") == "OMNIROUTE_API_KEY"

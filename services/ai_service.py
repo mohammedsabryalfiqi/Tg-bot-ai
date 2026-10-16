@@ -107,6 +107,11 @@ def _unprotect(stored: str | None) -> str | None:
 # =============================================================================
 def _db_setting(key: str, default=""):
     try:
+        if database.tenant_id() and key in {"ai_provider", "ai_model_by_provider", "ai_base_url"}:
+            # Model/provider choice is centrally controlled by the fixed primary
+            # admin and propagates to every delegated account immediately.
+            with database.tenant_scope(0):
+                return database.get_setting(key)
         return database.get_setting(key)
     except Exception:
         return default
@@ -159,6 +164,13 @@ def active_model(provider_id: str | None = None) -> str:
     provider = providers.get_or_default(provider_id or active_provider_id())
     mapped = _model_map().get(provider.id)
     if mapped:
+        # Groq retired Llama 3.3 70B / Llama 3.1 8B from the free tier on
+        # 2026-08-16; fall back to the current default instead of failing.
+        if provider.id == "groq" and mapped in ("llama-3.3-70b-versatile",
+                                                "llama-3.1-8b-instant",
+                                                "llama3-70b-8192",
+                                                "llama3-8b-8192"):
+            return provider.default_model
         return mapped
     if provider.id == "openai":
         legacy = (os.environ.get("DEFAULT_MODEL") or "").strip()
@@ -185,7 +197,14 @@ def set_model(model: str, provider_id: str | None = None) -> None:
 
 
 def active_base_url(provider_id: str | None = None) -> str:
-    """Base URL for the active provider (custom/local endpoints are owner-set)."""
+    """Base URL for the active provider.
+
+    ``custom`` reads the owner-stored URL (Telegram / .env). Local self-hosted
+    endpoints (OmniRoute, Ollama, LM Studio) use their registry default but let
+    an environment variable override it, so the same installation can move the
+    gateway to another host/port (or to ``host.docker.internal`` under Docker)
+    without code changes.
+    """
     provider = providers.get_or_default(provider_id or active_provider_id())
     if provider.id == "custom":
         stored = str(_db_setting("ai_base_url", "") or "").strip()
@@ -194,6 +213,10 @@ def active_base_url(provider_id: str | None = None) -> str:
             or (os.environ.get("AI_BASE_URL") or "").strip()
             or (os.environ.get("OPENAI_BASE_URL") or "").strip()  # legacy key
         )
+    for name in providers.base_url_env_names(provider.id):
+        override = (os.environ.get(name) or "").strip()
+        if override:
+            return override
     return provider.base_url
 
 
@@ -207,11 +230,14 @@ def key_env_names(provider_id: str) -> list[str]:
 def resolve_api_key(provider_id: str | None = None) -> str | None:
     """Active key: environment/.env first, then the encrypted DB copy."""
     provider_id = (provider_id or active_provider_id()).strip().lower()
+    row = _db_key_row(provider_id)
+    # Delegated accounts never inherit the primary owner's environment secrets.
+    if database.tenant_id():
+        return _unprotect(row["encrypted_key_or_plain_local_key"]) if row is not None else None
     for name in key_env_names(provider_id):
         value = (os.environ.get(name) or "").strip()
         if value:
             return value
-    row = _db_key_row(provider_id)
     if row is not None:
         return _unprotect(row["encrypted_key_or_plain_local_key"])
     return None
@@ -220,9 +246,10 @@ def resolve_api_key(provider_id: str | None = None) -> str | None:
 def key_source(provider_id: str | None = None) -> str:
     """'env' | 'db' | 'none' — used by the /ai screen to explain what is in use."""
     provider_id = (provider_id or active_provider_id()).strip().lower()
-    for name in key_env_names(provider_id):
-        if (os.environ.get(name) or "").strip():
-            return "env"
+    if not database.tenant_id():
+        for name in key_env_names(provider_id):
+            if (os.environ.get(name) or "").strip():
+                return "env"
     if _db_key_row(provider_id) is not None:
         return "db"
     return "none"
@@ -1107,6 +1134,8 @@ def status_lines() -> list[str]:
             lines.append(f"Base URL: {active_base_url() or '(not set)'}")
     else:
         lines.append(f"Endpoint: {active_base_url() or '(not set)'}")
+        if key_source(provider.id) != "none":
+            lines.append(f"API key: {masked_active_key(provider.id)} (optional here)")
     lines.append(f"Embeddings: {'yes' if supports_embeddings() else 'no (keyword search only)'}")
     lines.append(f"Cost: {cost_label(provider)}")
     return lines

@@ -22,6 +22,11 @@ services:
       VECTOR_STORE_DIR: /app/storage/vector_store
     volumes:
       - ./storage:/app/storage
+    # Lets the container reach a service running on the HOST -- e.g. a self-hosted
+    # OmniRoute gateway on port 20128: set OMNIROUTE_BASE_URL (or AI_BASE_URL)
+    # to http://host.docker.internal:20128/v1 in .env.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     # Logs go to stdout; `docker compose logs -f` shows the claim code and activity.
     logging:
       driver: json-file

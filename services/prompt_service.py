@@ -145,6 +145,18 @@ def build_system_prompt(faq_matches: list | None = None, kb_chunks: list | None 
     if custom:
         parts.append("OWNER'S STANDING INSTRUCTIONS (always follow them):\n" + custom)
 
+    priorities = (database.get_str("reply_priorities") or "").strip()
+    if priorities:
+        parts.append("BUSINESS REPLY PRIORITIES (in order):\n" + priorities)
+
+    never_reply = (database.get_str("never_reply_rules") or "").strip()
+    if never_reply:
+        parts.append(
+            "DO NOT ANSWER THESE TOPICS OR SITUATIONS:\n" + never_reply +
+            "\nIf a message falls into one of these cases, do not provide the requested "
+            "answer; politely say a team member will follow up."
+        )
+
     if database.get_bool("strict_kb_mode"):
         parts.append(
             "STRICT MODE: answer only from the knowledge base / approved answers "

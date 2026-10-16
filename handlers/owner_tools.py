@@ -35,9 +35,9 @@ TAKEOVER_INPUT_TTL_MINUTES = 15
 
 def register(bot, cfg) -> None:
     def cmd(commands, fn):
-        @bot.message_handler(commands=commands, func=security.is_owner_msg)
+        @bot.message_handler(commands=commands, func=security.is_operator_msg)
         def _handler(message, _fn=fn):
-            _safe(lambda: _fn(message))
+            security.run_as_operator(message, lambda: _safe(lambda: _fn(message)))
 
     cmd(["mode"], cmd_mode)
     cmd(["chats", "inbox"], cmd_chats)
@@ -187,7 +187,7 @@ def cmd_reply(message) -> None:
     chat_id = int(parts[0])
     if len(parts) < 2 or not parts[1].strip():
         # No text yet: park the target chat and let the owner type the message.
-        database.set_owner_pending_input(security.owner_id(), "reply_to_chat",
+        database.set_owner_pending_input(security.operator_id(), "reply_to_chat",
                                         {"chat_id": chat_id}, TAKEOVER_INPUT_TTL_MINUTES)
         return handlers.bot.send_message(
             message.chat.id,
@@ -232,7 +232,7 @@ def apply_pending(message, kind: str, context: dict) -> None:
     """
     if kind != "reply_to_chat":
         return
-    owner = security.owner_id()
+    owner = security.operator_id()
     database.clear_owner_pending_input(owner)
     try:
         chat_id = int((context or {}).get("chat_id") or 0)

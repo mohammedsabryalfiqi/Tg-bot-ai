@@ -32,22 +32,22 @@ PENDING_TTL_MINUTES = 10
 
 def register(bot, cfg) -> None:
     @bot.message_handler(commands=["ai", "ai_setup", "connect_ai", "provider"],
-                         func=security.is_owner_msg)
+                         func=security.is_operator_msg)
     def _ai(message):
-        _safe(lambda: open_root(message.chat.id))
+        security.run_as_operator(message, lambda: _safe(lambda: open_root(message.chat.id)))
 
-    @bot.message_handler(commands=["aimodel"], func=security.is_owner_msg)
+    @bot.message_handler(commands=["aimodel"], func=security.is_primary_admin_msg)
     def _aimodel(message):
-        _safe(lambda: _set_model_from_command(message))
+        security.run_as_operator(message, lambda: _safe(lambda: _set_model_from_command(message)))
 
-    @bot.message_handler(commands=["aitest"], func=security.is_owner_msg)
+    @bot.message_handler(commands=["aitest"], func=security.is_operator_msg)
     def _aitest(message):
-        _safe(lambda: run_test(message.chat.id))
+        security.run_as_operator(message, lambda: _safe(lambda: run_test(message.chat.id)))
 
     @bot.message_handler(commands=["freeai", "free_ai", "freeproviders", "free_providers"],
-                         func=security.is_owner_msg)
+                         func=security.is_primary_admin_msg)
     def _freeai(message):
-        _safe(lambda: open_free(message.chat.id))
+        security.run_as_operator(message, lambda: _safe(lambda: open_free(message.chat.id)))
 
     @bot.callback_query_handler(func=lambda c: c.data and c.data.startswith("ai:"))
     @security.owner_only_callback
@@ -79,15 +79,33 @@ def _status_text() -> str:
         f"Status: <b>{'ready ✅' if ready else 'not configured ⚠️'}</b>",
     ]
     lines.extend(f"{utils.escape(line)}" for line in ai_service.status_lines())
+    primary_admin = security.is_primary_admin(security.operator_id())
     if not ready and provider.key_required:
         lines.append("")
-        lines.append("Send the API key with the button below, or pick another provider.")
+        lines.append("Send your API key with the button below.")
+        if primary_admin:
+            lines[-1] = "Send the API key with the button below, or choose another provider."
+    if not primary_admin:
+        lines.append("\nOnly the primary admin can change the AI provider/model.")
     lines.append("")
-    lines.append("Providers with 🆓 offer a usable free tier; 💻 runs on your own computer.")
-    if not ready or providers.needs_credit(provider.id):
+    if primary_admin:
+        lines.append("Providers with 🆓 offer a usable free tier; 💻 runs on your own computer.")
+    else:
+        lines.append("The primary admin chooses the provider/model; this account manages its own key.")
+    if primary_admin and (not ready or providers.needs_credit(provider.id)):
         lines.append("💡 No credit card / no balance? Send /freeai for the providers "
                      "that cost nothing.")
     return "\n".join(lines)
+
+
+def _root_markup() -> keyboards.types.InlineKeyboardMarkup:
+    provider = ai_service.active_provider()
+    return keyboards.ai_root(
+        has_key=ai_service.has_api_key(provider.id),
+        is_ready=ai_service.is_ready(),
+        provider_label=provider.label,
+        primary_admin=security.is_primary_admin(security.operator_id()),
+    )
 
 
 def open_root(chat_id: int) -> None:
@@ -96,11 +114,7 @@ def open_root(chat_id: int) -> None:
         chat_id,
         _status_text(),
         parse_mode="HTML",
-        reply_markup=keyboards.ai_root(
-            has_key=ai_service.has_api_key(provider.id),
-            is_ready=ai_service.is_ready(),
-            provider_label=provider.label,
-        ),
+        reply_markup=_root_markup(),
     )
 
 
@@ -132,6 +146,12 @@ def _provider_detail_text(provider: providers.Provider) -> str:
         base = ai_service.active_base_url(provider.id) or "(not set)"
         lines.append(f"Base URL: <code>{utils.escape(base)}</code>")
         lines.append("Send the base URL, the model name and (optionally) an API key.")
+    elif provider.base_url:
+        base = ai_service.active_base_url(provider.id) or "(not set)"
+        lines.append("")
+        lines.append(f"Endpoint: <code>{utils.escape(base)}</code>")
+        if provider.local:
+            lines.append("<i>Must be reachable from the machine running the bot.</i>")
     lines.append("")
     lines.append(f"Model: <code>{utils.escape(ai_service.active_model(provider.id))}</code>")
     lines.append(f"Cost: {utils.escape(ai_service.cost_label(provider))}")
@@ -231,12 +251,18 @@ def on_callback(call) -> None:
     # Model names may contain ":" (OpenRouter's ":free" suffix), so keep the rest.
     arg = ":".join(parts[2:]) if len(parts) > 2 else ""
 
+    # Delegated admins can configure their own secret for the model selected by
+    # the primary admin, but cannot switch providers/models or alter the catalog.
+    allowed_for_delegate = {"root", "key", "test", "disconnect", "close"}
+    if (not security.is_primary_admin(getattr(getattr(call, "from_user", None), "id", None))
+            and action not in allowed_for_delegate):
+        return telegram_api.answer_callback(
+            bot, call.id, "Only the primary admin can change the AI provider or model.",
+            show_alert=True,
+        )
+
     if action == "root":
-        _edit_or_send(call, _status_text(), keyboards.ai_root(
-            has_key=ai_service.has_api_key(),
-            is_ready=ai_service.is_ready(),
-            provider_label=ai_service.active_provider().label,
-        ))
+        _edit_or_send(call, _status_text(), _root_markup())
         return telegram_api.answer_callback(bot, call.id)
 
     if action == "providers":
@@ -266,10 +292,7 @@ def on_callback(call) -> None:
     if action == "model":
         ai_service.set_model(arg)
         telegram_api.answer_callback(bot, call.id, f"Model: {arg}")
-        _edit_or_send(call, _status_text(), keyboards.ai_root(
-            has_key=ai_service.has_api_key(), is_ready=ai_service.is_ready(),
-            provider_label=ai_service.active_provider().label,
-        ))
+        _edit_or_send(call, _status_text(), _root_markup())
         return
 
     if action == "model_custom":
@@ -320,7 +343,7 @@ def _ask_for_key(call) -> None:
 def prompt_for_key(chat_id: int, provider: providers.Provider) -> None:
     """Park the conversation and ask for this provider's API key."""
     database.set_owner_pending_input(
-        security.owner_id(), "ai_key", {"provider": provider.id}, PENDING_TTL_MINUTES
+        security.operator_id(), "ai_key", {"provider": provider.id}, PENDING_TTL_MINUTES
     )
     hint = ""
     if provider.key_url:
@@ -357,7 +380,7 @@ def _free_switch(call, provider_id: str) -> None:
 def _ask_for_model(call, provider_id: str | None = None) -> None:
     provider = providers.get_or_default(provider_id or ai_service.active_provider_id())
     database.set_owner_pending_input(
-        security.owner_id(), "ai_model", {"provider": provider.id}, PENDING_TTL_MINUTES
+        security.operator_id(), "ai_model", {"provider": provider.id}, PENDING_TTL_MINUTES
     )
     telegram_api.answer_callback(handlers.bot, call.id, "Type the model name.")
     handlers.bot.send_message(
@@ -369,7 +392,7 @@ def _ask_for_model(call, provider_id: str | None = None) -> None:
 
 
 def _ask_for_base_url(call) -> None:
-    database.set_owner_pending_input(security.owner_id(), "ai_base_url", {}, PENDING_TTL_MINUTES)
+    database.set_owner_pending_input(security.operator_id(), "ai_base_url", {}, PENDING_TTL_MINUTES)
     telegram_api.answer_callback(handlers.bot, call.id, "Send the base URL.")
     handlers.bot.send_message(
         call.message.chat.id,
@@ -401,7 +424,7 @@ def _set_model_from_command(message) -> None:
 # Applying pending inputs (routed from approvals.on_owner_pending_input)
 # =============================================================================
 def apply_pending(message, kind: str, context: dict) -> None:
-    owner = security.owner_id()
+    owner = security.operator_id()
     database.clear_owner_pending_input(owner)
     raw = (getattr(message, "text", "") or "").strip()
     chat_id = message.chat.id

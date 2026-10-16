@@ -76,6 +76,10 @@ def test_key_env_var_covers_every_provider():
         if provider.key_required:
             assert env_var, f"{pid} requires a key but has no env var"
             assert env_var.isupper()
+        elif provider.id == "omniroute":
+            # OmniRoute needs no key by default but accepts an optional one
+            # (REQUIRE_API_KEY=true).
+            assert env_var == "OMNIROUTE_API_KEY"
         else:
             assert env_var == ""
 

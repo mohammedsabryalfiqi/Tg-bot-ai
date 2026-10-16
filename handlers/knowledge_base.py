@@ -26,33 +26,33 @@ def _args(message) -> str:
 
 
 def register(bot, cfg) -> None:
-    @bot.message_handler(commands=["kb"], func=security.is_owner_msg)
+    @bot.message_handler(commands=["kb"], func=security.is_operator_msg)
     def _kb(message):
-        _safe(lambda: open_menu(message))
+        security.run_as_operator(message, lambda: _safe(lambda: open_menu(message)))
 
-    @bot.message_handler(commands=["kb_add"], func=security.is_owner_msg)
+    @bot.message_handler(commands=["kb_add"], func=security.is_operator_msg)
     def _kb_add(message):
-        _safe(lambda: cmd_add(message))
+        security.run_as_operator(message, lambda: _safe(lambda: cmd_add(message)))
 
-    @bot.message_handler(commands=["kb_upload"], func=security.is_owner_msg)
+    @bot.message_handler(commands=["kb_upload"], func=security.is_operator_msg)
     def _kb_upload(message):
-        _safe(lambda: cmd_upload(message))
+        security.run_as_operator(message, lambda: _safe(lambda: cmd_upload(message)))
 
-    @bot.message_handler(commands=["kb_search"], func=security.is_owner_msg)
+    @bot.message_handler(commands=["kb_search"], func=security.is_operator_msg)
     def _kb_search(message):
-        _safe(lambda: cmd_search(message))
+        security.run_as_operator(message, lambda: _safe(lambda: cmd_search(message)))
 
-    @bot.message_handler(commands=["kb_list"], func=security.is_owner_msg)
+    @bot.message_handler(commands=["kb_list"], func=security.is_operator_msg)
     def _kb_list(message):
-        _safe(lambda: send_list(message.chat.id, 0))
+        security.run_as_operator(message, lambda: _safe(lambda: send_list(message.chat.id, 0)))
 
-    @bot.message_handler(commands=["kb_delete"], func=security.is_owner_msg)
+    @bot.message_handler(commands=["kb_delete"], func=security.is_operator_msg)
     def _kb_delete(message):
-        _safe(lambda: cmd_delete(message))
+        security.run_as_operator(message, lambda: _safe(lambda: cmd_delete(message)))
 
-    @bot.message_handler(commands=["kb_clear"], func=security.is_owner_msg)
+    @bot.message_handler(commands=["kb_clear"], func=security.is_operator_msg)
     def _kb_clear(message):
-        _safe(lambda: cmd_clear(message))
+        security.run_as_operator(message, lambda: _safe(lambda: cmd_clear(message)))
 
     @bot.callback_query_handler(func=lambda c: c.data and c.data.startswith("kb:"))
     @security.owner_only_callback
@@ -85,13 +85,13 @@ def open_menu(message) -> None:
 def cmd_add(message) -> None:
     text = _args(message)
     if not text:
-        database.set_owner_pending_input(security.owner_id(), "kb_add", {}, 10)
+        database.set_owner_pending_input(security.operator_id(), "kb_add", {}, 10)
         return handlers.notify_owner("Send the text to add to the knowledge base, or /cancel.")
     _do_add_text(text)
 
 
 def cmd_upload(message) -> None:
-    database.set_owner_pending_input(security.owner_id(), "kb_upload", {}, 10)
+    database.set_owner_pending_input(security.operator_id(), "kb_upload", {}, 10)
     handlers.notify_owner(
         "Send a document to add to the knowledge base "
         "(.txt, .md, .pdf, or .docx), or /cancel."
@@ -101,7 +101,7 @@ def cmd_upload(message) -> None:
 def cmd_search(message) -> None:
     query = _args(message)
     if not query:
-        database.set_owner_pending_input(security.owner_id(), "kb_search", {}, 10)
+        database.set_owner_pending_input(security.operator_id(), "kb_search", {}, 10)
         return handlers.notify_owner("Send a search query, or /cancel.")
     _do_search(message.chat.id, query)
 
@@ -155,17 +155,17 @@ def on_callback(call) -> None:
         return telegram_api.answer_callback(bot, call.id)
 
     if action == "add":
-        database.set_owner_pending_input(security.owner_id(), "kb_add", {}, 10)
+        database.set_owner_pending_input(security.operator_id(), "kb_add", {}, 10)
         handlers.notify_owner("Send the text to add to the knowledge base, or /cancel.")
         return telegram_api.answer_callback(bot, call.id, "Send text…")
 
     if action == "upload":
-        database.set_owner_pending_input(security.owner_id(), "kb_upload", {}, 10)
+        database.set_owner_pending_input(security.operator_id(), "kb_upload", {}, 10)
         handlers.notify_owner("Send a .txt/.md/.pdf/.docx document, or /cancel.")
         return telegram_api.answer_callback(bot, call.id, "Send a file…")
 
     if action == "search":
-        database.set_owner_pending_input(security.owner_id(), "kb_search", {}, 10)
+        database.set_owner_pending_input(security.operator_id(), "kb_search", {}, 10)
         handlers.notify_owner("Send a search query, or /cancel.")
         return telegram_api.answer_callback(bot, call.id, "Send a query…")
 
@@ -215,7 +215,7 @@ def on_callback(call) -> None:
 # Pending-input application (routed from approvals.on_owner_pending_input)
 # =============================================================================
 def apply_pending(message, kind: str, context: dict) -> None:
-    database.clear_owner_pending_input(security.owner_id())
+    database.clear_owner_pending_input(security.operator_id())
     if kind == "kb_add":
         text = (getattr(message, "text", None) or getattr(message, "caption", None) or "").strip()
         if not text:

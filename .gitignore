@@ -229,6 +229,7 @@ __marimo__/
 *.db-wal
 *.db-shm
 storage/smartel.db*
+backups/
 
 # Uploaded knowledge-base files and any external vector store, but keep the
 # directories themselves (.gitkeep).
