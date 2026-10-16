@@ -159,6 +159,13 @@ def active_model(provider_id: str | None = None) -> str:
     provider = providers.get_or_default(provider_id or active_provider_id())
     mapped = _model_map().get(provider.id)
     if mapped:
+        # Groq retired Llama 3.3 70B / Llama 3.1 8B from the free tier on
+        # 2026-08-16; fall back to the current default instead of failing.
+        if provider.id == "groq" and mapped in ("llama-3.3-70b-versatile",
+                                                "llama-3.1-8b-instant",
+                                                "llama3-70b-8192",
+                                                "llama3-8b-8192"):
+            return provider.default_model
         return mapped
     if provider.id == "openai":
         legacy = (os.environ.get("DEFAULT_MODEL") or "").strip()

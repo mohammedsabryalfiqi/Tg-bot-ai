@@ -63,7 +63,7 @@ def test_default_provider_is_openai(db):
 def test_env_provider_is_used_when_db_is_default(db, monkeypatch):
     monkeypatch.setenv("AI_PROVIDER", "groq")
     assert svc.active_provider_id() == "groq"
-    assert svc.active_model_label() == "llama-3.3-70b-versatile"
+    assert svc.active_model_label() == "openai/gpt-oss-120b"
 
 
 def test_db_setting_wins_over_env(db, monkeypatch):
@@ -92,9 +92,9 @@ def test_custom_provider_base_url_is_read_from_settings(db):
 
 def test_model_per_provider_is_remembered(db):
     svc.set_model("gpt-4o", "openai")
-    svc.set_model("llama-3.1-8b-instant", "groq")
+    svc.set_model("openai/gpt-oss-20b", "groq")
     assert svc.active_model("openai") == "gpt-4o"
-    assert svc.active_model("groq") == "llama-3.1-8b-instant"
+    assert svc.active_model("groq") == "openai/gpt-oss-20b"
     assert svc.has_explicit_model("groq") is True
     assert svc.has_explicit_model("mistral") is False
 

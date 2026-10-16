@@ -91,18 +91,20 @@ PROVIDERS: dict[str, Provider] = {
         label="Groq (fastest)",
         kind="openai_compat",
         base_url="https://api.groq.com/openai/v1",
-        default_model="llama-3.3-70b-versatile",
-        models=("llama-3.3-70b-versatile", "llama-3.1-8b-instant", "gpt-oss-120b",
-                "gemma2-9b-it"),
+        default_model="openai/gpt-oss-120b",
+        models=("openai/gpt-oss-120b", "openai/gpt-oss-20b", "qwen/qwen3.6-27b",
+                "qwen/qwen3.8-27b"),
         key_url="https://console.groq.com/keys",
         key_prefixes=("gsk_",),
         free_tier=True,
-        free_note="Free forever with an email only: thousands of requests/day on the "
-                  "small models, ~30 requests/minute. Replies in milliseconds.",
+        free_note="Free forever with an email only: ~1,000 requests/day on the "
+                  "chat models, ~30 requests/minute. Replies in milliseconds. "
+                  "(Llama 3.3 70B was retired from the free tier on 2026-08-16; "
+                  "GPT-OSS / Qwen are the replacements.)",
         docs="Free API key from console.groq.com — sign up with an email (no credit "
              "card), open “API Keys”, create one. Very fast. Knowledge base uses "
-             "keyword search (Groq has no embeddings API). If a model name is "
-             "rejected, use “Load models” — Groq rotates its free catalogue.",
+             "keyword search (Groq has no embeddings API). Groq rotates its free "
+             "catalogue often; if a model name is rejected, use “Load models”.",
     ),
     # -------------------------------------------------------------- Cerebras ---
     "cerebras": Provider(
