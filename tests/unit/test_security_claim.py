@@ -33,7 +33,7 @@ def test_correct_code_claims_ownership(db, stub_bot, make_message):
     texts = [call.args[1] for call in stub_bot.send_message.call_args_list]
     assert any("now the owner" in text for text in texts)
     # The claim is followed by the control panel so the owner lands on the UI.
-    assert any("Your Telegram Business assistant" in text for text in texts)
+    assert any("Alfiqi Ai — Telegram Business assistant" in text for text in texts)
 
 
 def test_claim_code_is_case_insensitive(db, stub_bot, make_message):

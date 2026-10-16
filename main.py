@@ -265,7 +265,7 @@ def _notify_startup(bot: telebot.TeleBot, cfg: config.Config, me: dict,
     try:
         from handlers import owner_tools
         text = (
-            f"✅ <b>SmarTel {VERSION} is online</b> as @{utils.escape(me['username'])}.\n"
+            f"✅ <b>Alfiqi Ai {VERSION} is online</b> as @{utils.escape(me['username'])}.\n"
             f"Mode: <b>{owner_tools.current_mode()}</b>\n"
             f"AI: <b>{'ready' if ai_service.is_ready() else 'not configured — open /ai'}</b> "
             f"({utils.escape(ai_service.backend_label())})\n"
@@ -292,7 +292,7 @@ def _notify_startup(bot: telebot.TeleBot, cfg: config.Config, me: dict,
 def _print_banner(cfg: config.Config, me: dict, claim_code: str | None) -> None:
     from handlers import owner_tools
     print("\n" + "=" * 64)
-    print(f" SmarTel {VERSION} — Telegram Business AI assistant")
+    print(f" Alfiqi Ai {VERSION} — Telegram Business AI assistant")
     print("=" * 64)
     print(f" Bot:          @{me['username']}")
     print(f" Owner ID:     {utils.mask_id(cfg.owner_user_id) if cfg.owner_user_id else '<claim from Telegram>'}")
@@ -316,7 +316,7 @@ def _print_banner(cfg: config.Config, me: dict, claim_code: str | None) -> None:
 
 def run_check(cfg: config.Config) -> int:
     """--check: verify configuration and connectivity without polling."""
-    print(f"SmarTel {VERSION} — configuration check\n")
+    print(f"Alfiqi Ai {VERSION} — configuration check\n")
     print(cfg.masked_summary())
     database.init_db(cfg)
     apply_env_ai_selection(cfg)
@@ -360,7 +360,7 @@ def main(argv: list[str]) -> int:
     _redaction_filter.add_secret(cfg.ai_api_key)
     _redaction_filter.add_secret(cfg.openai_api_key)
 
-    log.info("Starting SmarTel %s (token %s, owner %s)",
+    log.info("Starting Alfiqi Ai %s (token %s, owner %s)",
              VERSION, utils.mask_token(cfg.bot_token),
              utils.mask_id(cfg.owner_user_id) if cfg.owner_user_id else "<claim>")
 
@@ -380,6 +380,11 @@ def main(argv: list[str]) -> int:
     bot = build_bot(cfg)
     me = validate_bot(bot)
     log.info("Authenticated as @%s (id %s)", me["username"], utils.mask_id(me["id"]))
+    try:
+        bot.set_my_name("Alfiqi Ai")
+    except Exception as e:
+        log.warning("Could not set Telegram display name to Alfiqi Ai (%s); set it in @BotFather if needed.",
+                    type(e).__name__)
     clear_webhook(bot)
 
     claim_code = None

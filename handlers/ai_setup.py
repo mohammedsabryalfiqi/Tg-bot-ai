@@ -36,7 +36,7 @@ def register(bot, cfg) -> None:
     def _ai(message):
         security.run_as_operator(message, lambda: _safe(lambda: open_root(message.chat.id)))
 
-    @bot.message_handler(commands=["aimodel"], func=security.is_operator_msg)
+    @bot.message_handler(commands=["aimodel"], func=security.is_primary_admin_msg)
     def _aimodel(message):
         security.run_as_operator(message, lambda: _safe(lambda: _set_model_from_command(message)))
 
@@ -45,7 +45,7 @@ def register(bot, cfg) -> None:
         security.run_as_operator(message, lambda: _safe(lambda: run_test(message.chat.id)))
 
     @bot.message_handler(commands=["freeai", "free_ai", "freeproviders", "free_providers"],
-                         func=security.is_operator_msg)
+                         func=security.is_primary_admin_msg)
     def _freeai(message):
         security.run_as_operator(message, lambda: _safe(lambda: open_free(message.chat.id)))
 
@@ -79,15 +79,33 @@ def _status_text() -> str:
         f"Status: <b>{'ready ✅' if ready else 'not configured ⚠️'}</b>",
     ]
     lines.extend(f"{utils.escape(line)}" for line in ai_service.status_lines())
+    primary_admin = security.is_primary_admin(security.operator_id())
     if not ready and provider.key_required:
         lines.append("")
-        lines.append("Send the API key with the button below, or pick another provider.")
+        lines.append("Send your API key with the button below.")
+        if primary_admin:
+            lines[-1] = "Send the API key with the button below, or choose another provider."
+    if not primary_admin:
+        lines.append("\nOnly the primary admin can change the AI provider/model.")
     lines.append("")
-    lines.append("Providers with 🆓 offer a usable free tier; 💻 runs on your own computer.")
-    if not ready or providers.needs_credit(provider.id):
+    if primary_admin:
+        lines.append("Providers with 🆓 offer a usable free tier; 💻 runs on your own computer.")
+    else:
+        lines.append("The primary admin chooses the provider/model; this account manages its own key.")
+    if primary_admin and (not ready or providers.needs_credit(provider.id)):
         lines.append("💡 No credit card / no balance? Send /freeai for the providers "
                      "that cost nothing.")
     return "\n".join(lines)
+
+
+def _root_markup() -> keyboards.types.InlineKeyboardMarkup:
+    provider = ai_service.active_provider()
+    return keyboards.ai_root(
+        has_key=ai_service.has_api_key(provider.id),
+        is_ready=ai_service.is_ready(),
+        provider_label=provider.label,
+        primary_admin=security.is_primary_admin(security.operator_id()),
+    )
 
 
 def open_root(chat_id: int) -> None:
@@ -96,11 +114,7 @@ def open_root(chat_id: int) -> None:
         chat_id,
         _status_text(),
         parse_mode="HTML",
-        reply_markup=keyboards.ai_root(
-            has_key=ai_service.has_api_key(provider.id),
-            is_ready=ai_service.is_ready(),
-            provider_label=provider.label,
-        ),
+        reply_markup=_root_markup(),
     )
 
 
@@ -237,12 +251,18 @@ def on_callback(call) -> None:
     # Model names may contain ":" (OpenRouter's ":free" suffix), so keep the rest.
     arg = ":".join(parts[2:]) if len(parts) > 2 else ""
 
+    # Delegated admins can configure their own secret for the model selected by
+    # the primary admin, but cannot switch providers/models or alter the catalog.
+    allowed_for_delegate = {"root", "key", "test", "disconnect", "close"}
+    if (not security.is_primary_admin(getattr(getattr(call, "from_user", None), "id", None))
+            and action not in allowed_for_delegate):
+        return telegram_api.answer_callback(
+            bot, call.id, "Only the primary admin can change the AI provider or model.",
+            show_alert=True,
+        )
+
     if action == "root":
-        _edit_or_send(call, _status_text(), keyboards.ai_root(
-            has_key=ai_service.has_api_key(),
-            is_ready=ai_service.is_ready(),
-            provider_label=ai_service.active_provider().label,
-        ))
+        _edit_or_send(call, _status_text(), _root_markup())
         return telegram_api.answer_callback(bot, call.id)
 
     if action == "providers":
@@ -272,10 +292,7 @@ def on_callback(call) -> None:
     if action == "model":
         ai_service.set_model(arg)
         telegram_api.answer_callback(bot, call.id, f"Model: {arg}")
-        _edit_or_send(call, _status_text(), keyboards.ai_root(
-            has_key=ai_service.has_api_key(), is_ready=ai_service.is_ready(),
-            provider_label=ai_service.active_provider().label,
-        ))
+        _edit_or_send(call, _status_text(), _root_markup())
         return
 
     if action == "model_custom":

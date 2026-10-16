@@ -9,10 +9,26 @@ import pytest
 
 import database
 import handlers
+import security
 from handlers import ai_setup
 from services import ai_service, providers
 
-OWNER_CHAT = 12345
+OWNER_CHAT = 5231453921
+
+
+@pytest.fixture
+def make_call():
+    def _make(**kw):
+        return SimpleNamespace(
+            id=kw.pop("id", "cb1"),
+            data=kw.pop("data", "ai:root"),
+            from_user=SimpleNamespace(id=kw.pop("user_id", OWNER_CHAT)),
+            message=SimpleNamespace(
+                chat=SimpleNamespace(id=kw.pop("chat_id", OWNER_CHAT)),
+                message_id=kw.pop("message_id", 4242),
+            ),
+        )
+    return _make
 
 
 def _msg(text: str = "", message_id: int = 9001, chat_id: int = OWNER_CHAT, **kw):
@@ -37,6 +53,7 @@ def _sent(chat_id: int = OWNER_CHAT) -> list[str]:
 
 @pytest.fixture
 def env(db, stub_bot):
+    security.init(stub_bot, OWNER_CHAT)
     return db
 
 

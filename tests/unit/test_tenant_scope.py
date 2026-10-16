@@ -51,6 +51,16 @@ def test_faq_knowledge_and_keys_are_isolated(db):
     assert database.get_api_key_row("groq")["encrypted_key_or_plain_local_key"] == "main-secret"
 
 
+def test_admin_inherits_primary_selected_model_but_not_content(db):
+    database.set_setting("ai_provider", "groq")
+    database.set_setting("ai_model_by_provider", '{"groq":"openai/gpt-oss-120b"}')
+    database.set_setting("business_name", "Primary Business")
+    with database.tenant_scope(501):
+        assert database.get_str("ai_provider") == "groq"
+        assert database.get_str("ai_model_by_provider") == '{"groq":"openai/gpt-oss-120b"}'
+        assert database.get_str("business_name") == ""
+
+
 def test_admin_does_not_inherit_primary_environment_api_key(db, monkeypatch):
     from services import ai_service
     database.add_assistant_admin(501)

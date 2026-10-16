@@ -107,6 +107,11 @@ def _unprotect(stored: str | None) -> str | None:
 # =============================================================================
 def _db_setting(key: str, default=""):
     try:
+        if database.tenant_id() and key in {"ai_provider", "ai_model_by_provider", "ai_base_url"}:
+            # Model/provider choice is centrally controlled by the fixed primary
+            # admin and propagates to every delegated account immediately.
+            with database.tenant_scope(0):
+                return database.get_setting(key)
         return database.get_setting(key)
     except Exception:
         return default

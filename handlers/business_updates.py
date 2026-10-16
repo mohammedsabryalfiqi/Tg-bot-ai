@@ -52,9 +52,11 @@ def _tenant_for_connection_id(bcid: str | None) -> int | None:
     if conn is None or conn["business_user_id"] is None:
         return None
     uid = int(conn["business_user_id"])
-    if database.is_assistant_admin(uid) and not security.is_owner(uid):
+    if (database.is_assistant_admin(uid) and not security.is_owner(uid)
+            and not security.is_primary_admin(uid)):
         return uid
-    if database.multi_admin_enabled() and not security.is_owner(uid):
+    if (database.multi_admin_enabled() and not security.is_owner(uid)
+            and not security.is_primary_admin(uid)):
         return None
     return 0
 
@@ -106,13 +108,16 @@ def on_business_connection(bc) -> None:
         return
     if (bool(getattr(bc, "is_enabled", True)) and database.multi_admin_enabled()
             and not security.is_owner(user_id)
+            and not security.is_primary_admin(user_id)
             and not database.is_assistant_admin(user_id)):
         log.warning("rejecting unassigned account while multi-admin mode is active")
         return
     business_service.upsert_connection(bc)
     is_enabled = bool(getattr(bc, "is_enabled", True))
     can_reply = business_service.resolve_can_reply(bc)
-    notify = (lambda text: handlers.bot.send_message(user_id, text)) if database.is_assistant_admin(user_id) else handlers.notify_owner
+    notify = ((lambda text: handlers.bot.send_message(user_id, text))
+              if database.is_assistant_admin(user_id) or security.is_primary_admin(user_id)
+              else handlers.notify_owner)
     if is_enabled:
         notify(
             "🔗 <b>Business connection enabled.</b>\n"
@@ -145,12 +150,15 @@ def process_business_message(message) -> None:
     if account_id is None:
         return
     if (database.multi_admin_enabled() and not security.is_owner(account_id)
+            and not security.is_primary_admin(account_id)
             and not database.is_assistant_admin(account_id)):
         log.warning("message from unassigned account ignored while multi-admin mode is active")
         return
     # Existing primary-owner connections keep their legacy profile. Delegated
     # admins always get a separate database and cannot inherit the owner's data.
-    tenant = account_id if database.is_assistant_admin(account_id) and not security.is_owner(account_id) else 0
+    tenant = (account_id if database.is_assistant_admin(account_id)
+              and not security.is_owner(account_id)
+              and not security.is_primary_admin(account_id) else 0)
     with database.tenant_scope(tenant):
         _process_business_message_scoped(message)
 

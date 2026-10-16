@@ -50,3 +50,27 @@ def test_revoked_admin_loses_operator_access_permanently(db, stub_bot):
     database.remove_assistant_admin(501)
     assert not security.is_operator_msg(_message("/settings", 501))
     assert database.multi_admin_enabled()
+
+
+def test_only_fixed_primary_admin_is_authorized_to_manage_models():
+    assert security.is_primary_admin(5231453921)
+    assert not security.is_primary_admin(OWNER_ID)
+
+
+def test_delegate_ai_menu_only_shows_own_key_and_test_controls():
+    import keyboards
+    markup = keyboards.ai_root(False, False, "Groq", primary_admin=False)
+    labels = [button.text for row in markup.keyboard for button in row]
+    assert any("API key" in label for label in labels)
+    assert any("Test connection" in label for label in labels)
+    assert not any("provider" in label.lower() or "model" in label.lower()
+                   or "Load models" in label for label in labels)
+
+
+def test_semantic_inline_button_colors():
+    import keyboards
+    approval = keyboards.approval_actions(7)
+    buttons = {button.text: button for row in approval.keyboard for button in row}
+    assert buttons["✅ Send"].style == "success"
+    assert buttons["🚫 Reject"].style == "danger"
+    assert buttons["⏸ Pause Chat"].style == "danger"

@@ -147,23 +147,26 @@ def _rows_for_group(group: str) -> list[dict]:
 
 
 def _root_rows() -> list[dict]:
+    primary = security.is_primary_admin(security.operator_id())
     rows = [{"label": GROUPS[group], "callback_data": keyboards.cb("set", "group", group)}
-            for group in GROUPS]
-    # AI provider/model are managed by the richer /ai screen.
+            for group in GROUPS if primary or group != "ai"]
+    # Delegated admins can add/test their own key for the primary-selected model,
+    # but only the primary can switch providers or models.
     provider = ai_service.active_provider()
     rows.insert(3, {
-        "label": f"🧠 Provider: {provider.label}",
+        "label": f"🧠 {'Provider' if primary else 'AI connection'}: {provider.label}",
         "callback_data": keyboards.cb("ai", "root"),
     })
-    rows.insert(4, {
-        "label": f"🧠 Model: {ai_service.active_model_label()}",
-        "callback_data": keyboards.cb("ai", "models"),
-    })
-    if not ai_service.is_ready() or providers.needs_credit(provider.id):
-        rows.insert(5, {
-            "label": "🆓 Free AI providers (no card)",
-            "callback_data": keyboards.cb("ai", "providers_free"),
+    if primary:
+        rows.insert(4, {
+            "label": f"🧠 Model: {ai_service.active_model_label()}",
+            "callback_data": keyboards.cb("ai", "models"),
         })
+        if not ai_service.is_ready() or providers.needs_credit(provider.id):
+            rows.insert(5, {
+                "label": "🆓 Free AI providers (no card)",
+                "callback_data": keyboards.cb("ai", "providers_free"),
+            })
     return rows
 
 
@@ -207,6 +210,19 @@ def on_settings_callback(call) -> None:
     bot = handlers.bot
     parts = call.data.split(":")
     action = parts[1] if len(parts) > 1 else ""
+    primary = security.is_primary_admin(security.operator_id())
+    if not primary and action == "group" and len(parts) > 2 and parts[2] == "ai":
+        return telegram_api.answer_callback(
+            bot, call.id, "Only the primary admin can change the AI provider/model.",
+            show_alert=True,
+        )
+    if (not primary and action in {"enum", "num", "text", "enumval"}
+            and len(parts) > 2 and parts[2] in {"ai_provider", "ai_model_by_provider",
+                                                "ai_base_url", "temperature", "max_tokens"}):
+        return telegram_api.answer_callback(
+            bot, call.id, "Only the primary admin can change the AI provider/model.",
+            show_alert=True,
+        )
 
     if action == "root":
         _edit_root(call)

@@ -55,7 +55,7 @@ def register(bot, cfg) -> None:
     cmd(["connections"])(cmd_connections)
 
     # The primary owner alone controls delegated administrator accounts.
-    bot.message_handler(commands=["admin"], func=security.is_owner_msg)(
+    bot.message_handler(commands=["admin"], func=security.is_primary_admin_msg)(
         lambda message: _safe(lambda: cmd_admin(message))
     )
 
@@ -123,7 +123,7 @@ def cmd_admin(message) -> None:
     except ValueError:
         handlers.bot.send_message(message.chat.id, "Send a positive numeric Telegram user ID.")
         return
-    if remove and security.is_owner(user_id):
+    if remove and (security.is_owner(user_id) or security.is_primary_admin(user_id)):
         handlers.bot.send_message(message.chat.id, "The primary owner cannot be removed as a delegated admin.")
         return
     changed = (database.remove_assistant_admin(user_id) if remove
@@ -151,7 +151,7 @@ def _current_mode() -> str:
 def cmd_start(message) -> None:
     handlers.bot.send_message(
         message.chat.id,
-        "👋 <b>Your Telegram Business assistant</b>\n\n"
+        "👋 <b>Alfiqi Ai — Telegram Business assistant</b>\n\n"
         f"Mode: <b>{_current_mode()}</b> · AI: <b>{utils.escape(ai_service.backend_label())}</b> "
         f"({'ready ✅' if ai_service.is_ready() else 'not configured ⚠️ — open /ai'})\n\n"
         "Setup in three taps: /setup · /ai · /faq",
@@ -165,7 +165,7 @@ def cmd_start(message) -> None:
 
 
 HELP_TEXT = (
-    "🤖 <b>Your Telegram Business assistant</b>\n\n"
+    "🤖 <b>Alfiqi Ai — Telegram Business assistant</b>\n\n"
     "The bot answers your customers from your own Telegram Business account. "
     "Customers never talk to it directly — they message you, it replies as you.\n\n"
     "<b>First-time setup</b>\n"

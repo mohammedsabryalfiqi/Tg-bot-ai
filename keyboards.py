@@ -23,8 +23,9 @@ def cb(*parts) -> str:
     return data
 
 
-def _btn(text: str, data: str) -> types.InlineKeyboardButton:
-    return types.InlineKeyboardButton(text, callback_data=data)
+def _btn(text: str, data: str, style: str = "primary") -> types.InlineKeyboardButton:
+    """Telegram inline-button color: primary=blue, success=green, danger=red."""
+    return types.InlineKeyboardButton(text, callback_data=data, style=style)
 
 
 # =============================================================================
@@ -49,7 +50,8 @@ def control_panel(auto_on: bool, approval_on: bool, mode: str | None = None) -> 
         _btn("📊 Status", cb("panel", "status")),
         _btn("❓ Help", cb("panel", "help")),
     )
-    kb.add(_btn(f"{mode_label(mode)} — tap to change", cb("panel", "mode")))
+    kb.add(_btn(f"{mode_label(mode)} — tap to change", cb("panel", "mode"),
+         "success" if mode == "auto" else ("danger" if mode == "off" else "primary")))
     kb.add(
         _btn("🤖 AI provider", cb("ai", "root")),
         _btn("💬 Quick answers", cb("faq", "menu")),
@@ -60,7 +62,7 @@ def control_panel(auto_on: bool, approval_on: bool, mode: str | None = None) -> 
     )
     kb.add(
         _btn("📨 Pending approvals", cb("panel", "pending")),
-        _btn("🧹 Clear memory", cb("panel", "mem_clear")),
+        _btn("🧹 Clear memory", cb("panel", "mem_clear"), "danger"),
     )
     kb.add(
         _btn("🚀 Setup guide", cb("tool", "setup")),
@@ -73,7 +75,8 @@ def mode_keyboard(current: str) -> types.InlineKeyboardMarkup:
     kb = types.InlineKeyboardMarkup(row_width=1)
     for mode in ("auto", "draft", "off"):
         mark = "• " if mode == current else ""
-        kb.add(_btn(f"{mark}{mode_label(mode)}", cb("panel", "mode_set", mode)))
+        kb.add(_btn(f"{mark}{mode_label(mode)}", cb("panel", "mode_set", mode),
+                    "success" if mode == "auto" else ("danger" if mode == "off" else "primary")))
     kb.add(_btn("« Back", cb("panel", "home")))
     return kb
 
@@ -81,16 +84,18 @@ def mode_keyboard(current: str) -> types.InlineKeyboardMarkup:
 # =============================================================================
 # AI provider setup
 # =============================================================================
-def ai_root(has_key: bool, is_ready: bool, provider_label: str) -> types.InlineKeyboardMarkup:
+def ai_root(has_key: bool, is_ready: bool, provider_label: str,
+            primary_admin: bool = True) -> types.InlineKeyboardMarkup:
     kb = types.InlineKeyboardMarkup(row_width=1)
-    kb.add(_btn("🆓 Free providers (no credit card)", cb("ai", "providers_free")))
-    kb.add(_btn("🔁 Change provider", cb("ai", "providers")))
-    kb.add(_btn("🧠 Change model", cb("ai", "models")))
-    kb.add(_btn("🔄 Load models from the provider", cb("ai", "models_live")))
-    kb.add(_btn("🔑 Add / update API key", cb("ai", "key")))
-    kb.add(_btn("🧪 Test connection", cb("ai", "test")))
+    if primary_admin:
+        kb.add(_btn("🆓 Free providers (no credit card)", cb("ai", "providers_free")))
+        kb.add(_btn("🔁 Change provider", cb("ai", "providers")))
+        kb.add(_btn("🧠 Change model", cb("ai", "models")))
+        kb.add(_btn("🔄 Load models from the provider", cb("ai", "models_live")))
+    kb.add(_btn("🔑 Add / update API key", cb("ai", "key"), "success"))
+    kb.add(_btn("🧪 Test connection", cb("ai", "test"), "success"))
     if has_key:
-        kb.add(_btn("🗑 Remove API key", cb("ai", "disconnect")))
+        kb.add(_btn("🗑 Remove API key", cb("ai", "disconnect"), "danger"))
     kb.add(_btn("✖ Close", cb("ai", "close")))
     return kb
 
@@ -171,7 +176,7 @@ def ai_provider_actions(provider_id: str, key_required: bool) -> types.InlineKey
     kb.add(_btn("🔄 Load models from the provider", cb("ai", "models_live")))
     if provider_id == "custom":
         kb.add(_btn("🌐 Set base URL", cb("ai", "base_url")))
-    kb.add(_btn("🧪 Test connection", cb("ai", "test")))
+    kb.add(_btn("🧪 Test connection", cb("ai", "test"), "success"))
     if not _providers.get(provider_id) or not _providers.is_free(
             _providers.get_or_default(provider_id)):
         kb.add(_btn("🆓 Free providers instead", cb("ai", "providers_free")))
@@ -184,11 +189,11 @@ def ai_provider_actions(provider_id: str, key_required: bool) -> types.InlineKey
 # =============================================================================
 def faq_menu() -> types.InlineKeyboardMarkup:
     kb = types.InlineKeyboardMarkup(row_width=1)
-    kb.add(_btn("➕ Add a quick answer", cb("faq", "add")))
+    kb.add(_btn("➕ Add a quick answer", cb("faq", "add"), "success"))
     kb.add(_btn("📃 List / delete", cb("faq", "list", 0)))
     kb.add(_btn("🔍 Search", cb("faq", "search")))
     kb.add(_btn("⬇️ Export (JSON)", cb("faq", "export")))
-    kb.add(_btn("🗑 Clear all", cb("faq", "clear")))
+    kb.add(_btn("🗑 Clear all", cb("faq", "clear"), "danger"))
     kb.add(_btn("✖ Close", cb("faq", "close")))
     return kb
 
@@ -199,7 +204,7 @@ def faq_list(entries: list, page: int, per_page: int = 5) -> types.InlineKeyboar
     for entry in entries[start:start + per_page]:
         title = (entry["keywords"] or "")[:28]
         state = "• " if entry["enabled"] else "✖ "
-        kb.add(_btn(f"🗑 {state}{title}", cb("faq", "del", entry["id"], page)))
+        kb.add(_btn(f"🗑 {state}{title}", cb("faq", "del", entry["id"], page), "danger"))
     nav = []
     if page > 0:
         nav.append(_btn("« Prev", cb("faq", "list", page - 1)))
@@ -225,9 +230,9 @@ def chats_list(rows: list[dict]) -> types.InlineKeyboardMarkup:
 def chat_actions(chat_id: int, paused: bool) -> types.InlineKeyboardMarkup:
     kb = types.InlineKeyboardMarkup(row_width=2)
     if paused:
-        kb.add(_btn("▶️ Resume auto-reply", cb("tool", "resume", chat_id)))
+        kb.add(_btn("▶️ Resume auto-reply", cb("tool", "resume", chat_id), "success"))
     else:
-        kb.add(_btn("⏸ Pause auto-reply", cb("tool", "pause", chat_id)))
+        kb.add(_btn("⏸ Pause auto-reply", cb("tool", "pause", chat_id), "danger"))
     kb.add(_btn("✖ Close", cb("tool", "close")))
     return kb
 
@@ -246,12 +251,12 @@ def setup_checklist(steps: dict) -> types.InlineKeyboardMarkup:
 def approval_actions(approval_id: int) -> types.InlineKeyboardMarkup:
     kb = types.InlineKeyboardMarkup(row_width=2)
     kb.add(
-        _btn("✅ Send", cb("apr", "send", approval_id)),
+        _btn("✅ Send", cb("apr", "send", approval_id), "success"),
         _btn("✏️ Edit", cb("apr", "edit", approval_id)),
     )
     kb.add(
-        _btn("🚫 Reject", cb("apr", "reject", approval_id)),
-        _btn("⏸ Pause Chat", cb("apr", "pause", approval_id)),
+        _btn("🚫 Reject", cb("apr", "reject", approval_id), "danger"),
+        _btn("⏸ Pause Chat", cb("apr", "pause", approval_id), "danger"),
     )
     return kb
 
@@ -283,14 +288,14 @@ def settings_enum(key: str, choices: list[str], current: str) -> types.InlineKey
 def kb_menu() -> types.InlineKeyboardMarkup:
     kb = types.InlineKeyboardMarkup(row_width=2)
     kb.add(
-        _btn("➕ Add text", cb("kb", "add")),
-        _btn("📎 Upload file", cb("kb", "upload")),
+        _btn("➕ Add text", cb("kb", "add"), "success"),
+        _btn("📎 Upload file", cb("kb", "upload"), "success"),
     )
     kb.add(
         _btn("🔍 Search", cb("kb", "search")),
         _btn("📃 List items", cb("kb", "list", 0)),
     )
-    kb.add(_btn("🗑 Clear all", cb("kb", "clear")))
+    kb.add(_btn("🗑 Clear all", cb("kb", "clear"), "danger"))
     kb.add(_btn("✖ Close", cb("kb", "close")))
     return kb
 
@@ -302,7 +307,7 @@ def kb_list_keyboard(items: list, page: int, per_page: int = 5) -> types.InlineK
     for item in page_items:
         title = (item["title"] or "Untitled")[:30]
         kb.add(_btn(f"🗑 #{item['id']} {title} ({item['chunk_count']})",
-                    cb("kb", "del", item["id"], page)))
+                    cb("kb", "del", item["id"], page), "danger"))
     nav = []
     if page > 0:
         nav.append(_btn("« Prev", cb("kb", "list", page - 1)))
@@ -320,7 +325,7 @@ def kb_list_keyboard(items: list, page: int, per_page: int = 5) -> types.InlineK
 def confirm(token: str) -> types.InlineKeyboardMarkup:
     kb = types.InlineKeyboardMarkup(row_width=2)
     kb.add(
-        _btn("✅ Yes", cb("confirm", "yes", token)),
-        _btn("✖ No", cb("confirm", "no", token)),
+        _btn("✅ Yes", cb("confirm", "yes", token), "success"),
+        _btn("✖ No", cb("confirm", "no", token), "danger"),
     )
     return kb

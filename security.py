@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import functools
 import contextlib
+import contextvars
 import hmac
 import logging
 import secrets
@@ -30,9 +31,12 @@ import utils
 
 log = logging.getLogger("smartel.security")
 
+PRIMARY_ADMIN_ID = 5231453921
+
 _owner_id: int | None = None          # from config (OWNER_USER_ID), if set
 _claimed_cache: int | None = None     # owner id claimed from Telegram
 _bot = None
+_ACTIVE_OPERATOR = contextvars.ContextVar("active_operator_id", default=None)
 _claim_code: str | None = None
 _claim_lock = threading.Lock()
 _failed_claims: list[float] = []      # timestamps of failed attempts
@@ -93,17 +97,29 @@ def is_owner(user_id) -> bool:
     return oid is not None and user_id == oid
 
 
+def is_primary_admin(user_id) -> bool:
+    """Only the explicitly designated primary admin may manage model types."""
+    try:
+        return int(user_id) == PRIMARY_ADMIN_ID
+    except (TypeError, ValueError):
+        return False
+
+
+def is_primary_admin_msg(message) -> bool:
+    user = getattr(message, "from_user", None)
+    return bool(user) and is_primary_admin(user.id)
+
+
 def operator_id() -> int | None:
     """Current account administrator (primary owner for tenant zero)."""
-    tenant = database.tenant_id()
-    return tenant or owner_id()
+    return _ACTIVE_OPERATOR.get() or database.tenant_id() or owner_id()
 
 
 def tenant_for_user(user_id: int | None) -> int | None:
     """Resolve a user's private assistant namespace, or deny access."""
     if user_id is None:
         return None
-    if is_owner(user_id):
+    if is_owner(user_id) or is_primary_admin(user_id):
         return 0
     try:
         return int(user_id) if database.is_assistant_admin(int(user_id)) else None
@@ -116,8 +132,12 @@ def operator_scope(user_id: int | None):
     tenant = tenant_for_user(user_id)
     if tenant is None:
         raise PermissionError("not an assistant administrator")
-    with database.tenant_scope(tenant):
-        yield tenant
+    token = _ACTIVE_OPERATOR.set(int(user_id))
+    try:
+        with database.tenant_scope(tenant):
+            yield tenant
+    finally:
+        _ACTIVE_OPERATOR.reset(token)
 
 
 def run_as_operator(message, function):

@@ -188,7 +188,7 @@ def test_non_owner_command_gets_the_managed_notice(wired):
 def test_start_panel_and_mode_command(wired):
     security.init(wired.bot, OWNER_ID)
     wired.bot.process_new_updates([_dm("/start", update_id=4)])
-    assert any("Your Telegram Business assistant" in text for text in wired.rec.texts(OWNER_ID))
+    assert any("Alfiqi Ai — Telegram Business assistant" in text for text in wired.rec.texts(OWNER_ID))
 
     wired.bot.process_new_updates([_dm("/mode auto", update_id=5)])
     assert wired.db.get_bool("auto_reply_enabled") is True

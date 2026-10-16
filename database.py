@@ -484,9 +484,19 @@ def get_all_settings() -> dict[str, object]:
 
 def seed_default_settings() -> None:
     now = utils.now_iso()
+    tenant = tenant_id()
+    shared_model_defaults = {}
+    if tenant:
+        # The primary admin chooses the provider/model; delegated accounts use
+        # that approved model by default but keep their own API key and content.
+        with tenant_scope(0):
+            shared_model_defaults = {
+                key: get_setting(key)
+                for key in ("ai_provider", "ai_model_by_provider", "ai_base_url")
+            }
     with write_tx() as cur:
         for key, (typ, default) in SETTINGS_SCHEMA.items():
-            value = _SEED_DEFAULTS.get(key, default)
+            value = shared_model_defaults.get(key, _SEED_DEFAULTS.get(key, default))
             cur.execute(
                 "INSERT OR IGNORE INTO settings(key, value, updated_at) VALUES(?,?,?)",
                 (_setting_key(key), _serialize(value, typ), now),
