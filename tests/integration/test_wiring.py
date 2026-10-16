@@ -841,3 +841,58 @@ def test_refunding_marks_the_payment_and_talks_to_telegram(wired_owned, monkeypa
 
     assert calls == [(4242, "ch_7")]
     assert wired_owned.db.get_paid_message(paid_id)["status"] == "refunded"
+
+
+def test_every_new_owner_callback_runs_without_swallowing_an_error(wired_owned, monkeypatch,
+                                                                  caplog):
+    """Press every new button with real data behind it.
+
+    The handlers catch their own exceptions (an owner screen must never kill the
+    polling loop), so this test asserts on the *logs*: a swallowed exception is
+    the only visible trace of a broken screen.
+    """
+    import logging
+
+    monkeypatch.setattr("telegram_api.get_chat",
+                        lambda ref: {"title": "قناتي", "type": "channel"})
+    wired_owned.db.add_required_channel("@required", title="قناة", invite_link="https://t.me/required")
+    wired_owned.db.set_setting("require_subscription_enabled", True)
+    wired_owned.db.set_setting("paid_messages_enabled", True)
+    wired_owned.db.set_setting("paid_message_stars", 30)
+
+    with monkeypatch.context() as offline:
+        offline.setattr("services.ai_service.is_ready", lambda: False)
+        from services import rules_service
+        draft = rules_service.organize("قاعدة للاختبار")
+    from services import resource_service
+    monkeypatch.setattr("services.resource_service.fetch_text", lambda url: ("", ""))
+    resource = resource_service.add("https://example.com")
+    question_id = wired_owned.db.insert_unanswered("direct", 4242, "سؤال")
+    channel_id = wired_owned.db.list_required_channels()[0]["id"]
+    rule_id = wired_owned.db.list_topic_rules(enabled_only=False)[0]["id"]
+    payload = "pm:4242:x"
+    wired_owned.db.create_paid_message(4242, 4242, payload, 30, "مدفوع")
+    paid_id = wired_owned.db.get_paid_message_by_payload(payload)["id"]
+
+    presses = [
+        "rule:root", "rule:list", f"rule:toggle:{rule_id}", f"rule:no:{draft.batch}",
+        "res:root", "res:list", f"res:toggle:{resource.resource_id}",
+        "unans:list", f"unans:open:{question_id}", f"unans:ignore:{question_id}",
+        "gate:root", "gate:sub", "gate:stars", "gate:list", "gate:toggle_sub",
+        "gate:toggle_stars", "gate:toggle_channel:%d" % channel_id, "gate:free",
+        f"gate:refund:{paid_id}",
+        "rule:close", "res:close", "unans:close", "gate:close",
+    ]
+    with caplog.at_level(logging.ERROR):
+        for index, data in enumerate(presses, start=800):
+            wired_owned.rec.messages.clear()
+            wired_owned.rec.edits.clear()
+            wired_owned.rec.edits_full.clear()
+            wired_owned.bot.process_new_updates([_callback(data, update_id=index)])
+            assert (wired_owned.rec.messages or wired_owned.rec.edits
+                    or wired_owned.rec.callbacks or wired_owned.rec.deleted), \
+                f"{data} did nothing at all"
+
+    problems = [record.getMessage() for record in caplog.records
+                if record.levelno >= logging.ERROR]
+    assert problems == []
