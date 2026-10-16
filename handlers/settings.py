@@ -47,16 +47,11 @@ SETTINGS = [
     {"key": "monitoring_mode", "group": "reply", "type": "bool"},
     {"key": "memory_enabled", "group": "reply", "type": "bool"},
     {"key": "typing_indicator", "group": "reply", "type": "bool"},
-    {"key": "reply_debounce_seconds", "group": "reply", "type": "float", "min": 0.0, "max": 8.0},
     {"key": "process_nontext_enabled", "group": "reply", "type": "bool"},
     {"key": "nontext_ack_message", "group": "reply", "type": "text",
      "hint_key": "set.opt.nontext_ack_message.hint"},
     {"key": "greet_new_customers", "group": "reply", "type": "bool"},
     {"key": "welcome_text", "group": "reply", "type": "text"},
-    {"key": "owner_takeover_pause_minutes", "group": "reply", "type": "int",
-     "min": 1, "max": 100000},
-    {"key": "max_messages_per_customer_per_hour", "group": "reply", "type": "int",
-     "min": 1, "max": 100000},
     {"key": "direct_reply_enabled", "group": "reply", "type": "bool",
      "hint_key": "set.opt.direct_reply_enabled.hint"},
     {"key": "public_direct_bot_chat_enabled", "group": "reply", "type": "bool"},
@@ -76,7 +71,6 @@ SETTINGS = [
      "choice_prefix": "set.lang."},
     {"key": "signature", "group": "persona", "type": "text",
      "hint_key": "set.opt.signature.hint"},
-    {"key": "max_reply_chars", "group": "persona", "type": "int", "min": 80, "max": 4096},
     {"key": "disclose_ai", "group": "persona", "type": "bool"},
     {"key": "custom_instructions", "group": "persona", "type": "text",
      "hint_key": "set.opt.custom_instructions.hint"},
@@ -102,6 +96,15 @@ SETTINGS = [
      "hint_key": "set.opt.faq_match_threshold.hint"},
     {"key": "kb_enabled", "group": "ground", "type": "bool"},
     {"key": "strict_kb_mode", "group": "ground", "type": "bool"},
+
+    # --- limits & timing ------------------------------------------------------
+    {"key": "max_reply_chars", "group": "limits", "type": "int", "min": 80, "max": 4096},
+    {"key": "reply_debounce_seconds", "group": "limits", "type": "float",
+     "min": 0.0, "max": 8.0},
+    {"key": "max_messages_per_customer_per_hour", "group": "limits", "type": "int",
+     "min": 1, "max": 100000},
+    {"key": "owner_takeover_pause_minutes", "group": "limits", "type": "int",
+     "min": 1, "max": 100000},
 ]
 _BY_KEY = {s["key"]: s for s in SETTINGS}
 
