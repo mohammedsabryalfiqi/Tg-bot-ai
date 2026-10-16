@@ -19,6 +19,7 @@ import logging
 
 import database
 import handlers
+import i18n
 import keyboards
 import security
 import telegram_api
@@ -74,27 +75,26 @@ def _status_text() -> str:
     provider = ai_service.active_provider()
     ready = ai_service.is_ready()
     lines = [
-        "🤖 <b>AI provider</b>",
+        i18n.t("ai.title"),
         "",
-        f"Status: <b>{'ready ✅' if ready else 'not configured ⚠️'}</b>",
+        i18n.t("ai.status", state=i18n.t("own.ai.ready") if ready
+               else i18n.t("own.ai.not_ready_short")),
     ]
     lines.extend(f"{utils.escape(line)}" for line in ai_service.status_lines())
     primary_admin = security.is_primary_admin(security.operator_id())
     if not ready and provider.key_required:
         lines.append("")
-        lines.append("Send your API key with the button below.")
-        if primary_admin:
-            lines[-1] = "Send the API key with the button below, or choose another provider."
+        lines.append(i18n.t("ai.send_key_hint") if not primary_admin
+                     else i18n.t("ai.send_key_hint_or_pick"))
     if not primary_admin:
-        lines.append("\nOnly the primary admin can change the AI provider/model.")
+        lines.append(i18n.t("ai.primary_only_note"))
     lines.append("")
     if primary_admin:
-        lines.append("Providers with 🆓 offer a usable free tier; 💻 runs on your own computer.")
+        lines.append(i18n.t("ai.legend"))
     else:
-        lines.append("The primary admin chooses the provider/model; this account manages its own key.")
+        lines.append(i18n.t("ai.delegate_note"))
     if primary_admin and (not ready or providers.needs_credit(provider.id)):
-        lines.append("💡 No credit card / no balance? Send /freeai for the providers "
-                     "that cost nothing.")
+        lines.append(i18n.t("ai.freeai_hint"))
     return "\n".join(lines)
 
 
@@ -136,44 +136,38 @@ def _provider_detail_text(provider: providers.Provider) -> str:
         lines.append(utils.escape(provider.docs))
     if provider.key_url:
         lines.append("")
-        lines.append(f"🔑 Get a key: {utils.escape(provider.key_url)}")
+        lines.append(i18n.t("ai.get_key", url=utils.escape(provider.key_url)))
     source = ai_service.key_source(provider.id)
     if source != "none":
-        origin = "from .env (terminal)" if source == "env" else "saved in Telegram"
+        origin = i18n.t("ai.key_source.env") if source == "env" \
+            else i18n.t("ai.key_source.telegram")
         lines.append("")
-        lines.append(f"Current key: {utils.escape(ai_service.masked_active_key(provider.id))} ({origin})")
+        lines.append(i18n.t("ai.current_key",
+                            masked=utils.escape(ai_service.masked_active_key(provider.id)),
+                            origin=origin))
     if provider.id == "custom":
-        base = ai_service.active_base_url(provider.id) or "(not set)"
-        lines.append(f"Base URL: <code>{utils.escape(base)}</code>")
-        lines.append("Send the base URL, the model name and (optionally) an API key.")
+        base = ai_service.active_base_url(provider.id) or i18n.t("ai.not_set")
+        lines.append(i18n.t("ai.base_url", base=utils.escape(base)))
+        lines.append(i18n.t("ai.custom_hint"))
     elif provider.base_url:
-        base = ai_service.active_base_url(provider.id) or "(not set)"
+        base = ai_service.active_base_url(provider.id) or i18n.t("ai.not_set")
         lines.append("")
-        lines.append(f"Endpoint: <code>{utils.escape(base)}</code>")
+        lines.append(i18n.t("ai.endpoint", base=utils.escape(base)))
         if provider.local:
-            lines.append("<i>Must be reachable from the machine running the bot.</i>")
+            lines.append(i18n.t("ai.local_note"))
     lines.append("")
-    lines.append(f"Model: <code>{utils.escape(ai_service.active_model(provider.id))}</code>")
-    lines.append(f"Cost: {utils.escape(ai_service.cost_label(provider))}")
+    lines.append(i18n.t("ai.model_line",
+                        model=utils.escape(ai_service.active_model(provider.id))))
+    lines.append(i18n.t("ai.cost_line", cost=utils.escape(ai_service.cost_label(provider))))
     if not providers.is_free(provider):
         lines.append("")
-        lines.append("💡 This provider needs paid credit. /freeai lists the free ones.")
+        lines.append(i18n.t("ai.needs_credit"))
     return "\n".join(lines)
 
 
 def _open_providers(call, free_only: bool = False) -> None:
-    if free_only:
-        text = (
-            "🆓 <b>Free AI providers</b>\n\n"
-            "No credit card and no balance needed. Tap one and the bot switches to "
-            "it, then asks for its key (a couple of these need no key at all)."
-        )
-    else:
-        text = (
-            "🔁 <b>Choose an AI provider</b>\n\n"
-            "Your customers' messages are answered by this model. "
-            "You can switch any time — nothing else in the bot changes."
-        )
+    text = i18n.t("ai.providers.free_title") if free_only \
+        else i18n.t("ai.providers.title")
     _edit_or_send(call, text,
                   keyboards.ai_providers(ai_service.active_provider_id(), free_only=free_only))
 
@@ -181,11 +175,10 @@ def _open_providers(call, free_only: bool = False) -> None:
 def open_free(chat_id: int) -> None:
     """`/freeai` — the zero-cost shortlist, with each provider's real limits."""
     active_id = ai_service.active_provider_id()
-    lines = ["🆓 <b>AI providers that cost nothing</b>", "",
-             "No credit card, no balance top-up. Pick one, get a key, tap it here:", ""]
+    lines = [i18n.t("ai.free.title"), "", i18n.t("ai.free.intro"), ""]
     for provider in providers.free():
         tag = "💻" if provider.local else "🆓"
-        name = provider.label + ("  ← active now" if provider.id == active_id else "")
+        name = provider.label + (i18n.t("ai.free.active") if provider.id == active_id else "")
         lines.append(f"{tag} <b>{utils.escape(name)}</b>")
         note = provider.free_note or provider.docs
         if note:
@@ -193,21 +186,9 @@ def open_free(chat_id: int) -> None:
         if provider.key_url:
             lines.append(f"    🔑 {utils.escape(provider.key_url)}")
         elif not provider.key_required:
-            lines.append("    🔑 No API key needed")
+            lines.append(i18n.t("ai.free.no_key_needed"))
         lines.append("")
-    lines += [
-        "<b>Which one?</b>",
-        "• Easiest + most generous: <b>Google Gemini</b> (a Google account is enough).",
-        "• Fastest: <b>Groq</b> or <b>Cerebras</b>.",
-        "• Many models with one key: <b>OpenRouter</b> (use a model ending in "
-        "<code>:free</code>).",
-        "• No signup at all: <b>Pollinations</b> — but it is slow and best effort.",
-        "• No internet / total privacy: <b>Ollama</b> or <b>LM Studio</b> on your PC.",
-        "",
-        "Free tiers are rate limited (per minute / per day) and reset on their own. "
-        "After switching, press 🧪 Test connection — and if a model name is refused, "
-        "use 🔄 Load models to see what your key can run.",
-    ]
+    lines.append(i18n.t("ai.free.which"))
     text = "\n".join(lines)
     markup = keyboards.ai_providers(active_id, free_only=True)
     for i, chunk in enumerate(utils.split_message(text)):
@@ -218,11 +199,12 @@ def open_free(chat_id: int) -> None:
 def _select_provider(call, provider_id: str) -> None:
     provider = providers.get(provider_id)
     if provider is None:
-        return telegram_api.answer_callback(handlers.bot, call.id, "Unknown provider.")
+        return telegram_api.answer_callback(handlers.bot, call.id, i18n.t("ai.unknown_provider"))
     ai_service.set_provider(provider.id)
     if not ai_service.has_explicit_model(provider.id) and provider.default_model:
         ai_service.set_model(provider.default_model, provider.id)
-    telegram_api.answer_callback(handlers.bot, call.id, f"Provider: {provider.label}")
+    telegram_api.answer_callback(handlers.bot, call.id,
+                                 i18n.t("ai.provider_set", label=provider.label))
     _edit_or_send(call, _provider_detail_text(provider),
                   keyboards.ai_provider_actions(provider.id, provider.key_required))
 
@@ -234,9 +216,8 @@ def _open_models(call, provider_id: str | None = None) -> None:
         return _ask_for_model(call, provider.id)
     _edit_or_send(
         call,
-        f"🧠 <b>Model for {utils.escape(provider.label)}</b>\n\n"
-        f"Current: <code>{utils.escape(ai_service.active_model(provider.id))}</code>\n"
-        "Pick one, or type any model name your account supports.",
+        i18n.t("ai.models.title", label=utils.escape(provider.label),
+               current=utils.escape(ai_service.active_model(provider.id))),
         keyboards.ai_models(models, ai_service.active_model(provider.id)),
     )
 
@@ -257,8 +238,7 @@ def on_callback(call) -> None:
     if (not security.is_primary_admin(getattr(getattr(call, "from_user", None), "id", None))
             and action not in allowed_for_delegate):
         return telegram_api.answer_callback(
-            bot, call.id, "Only the primary admin can change the AI provider or model.",
-            show_alert=True,
+            bot, call.id, i18n.t("ai.primary_only_cb"), show_alert=True,
         )
 
     if action == "root":
@@ -291,7 +271,7 @@ def on_callback(call) -> None:
 
     if action == "model":
         ai_service.set_model(arg)
-        telegram_api.answer_callback(bot, call.id, f"Model: {arg}")
+        telegram_api.answer_callback(bot, call.id, i18n.t("ai.model_set_cb", model=arg))
         _edit_or_send(call, _status_text(), _root_markup())
         return
 
@@ -308,7 +288,7 @@ def on_callback(call) -> None:
         return
 
     if action == "test":
-        telegram_api.answer_callback(bot, call.id, "Testing…")
+        telegram_api.answer_callback(bot, call.id, i18n.t("ai.testing"))
         run_test(call.message.chat.id)
         return
 
@@ -316,8 +296,7 @@ def on_callback(call) -> None:
         provider = ai_service.active_provider()
         _edit_or_send(
             call,
-            f"Remove the stored API key for <b>{utils.escape(provider.label)}</b>?\n"
-            "The bot will stop generating replies until a key is added again.",
+            i18n.t("ai.remove_key_ask", label=utils.escape(provider.label)),
             keyboards.confirm("aidisconnect"),
         )
         return telegram_api.answer_callback(bot, call.id)
@@ -327,7 +306,7 @@ def on_callback(call) -> None:
             bot.delete_message(call.message.chat.id, call.message.message_id)
         except Exception:
             pass
-        return telegram_api.answer_callback(bot, call.id, "Closed.")
+        return telegram_api.answer_callback(bot, call.id, i18n.t("tool.callback.closed"))
 
     telegram_api.answer_callback(bot, call.id)
 
@@ -336,7 +315,7 @@ def on_callback(call) -> None:
 # Pending-input prompts (answers arrive via approvals.on_owner_pending_input)
 # =============================================================================
 def _ask_for_key(call) -> None:
-    telegram_api.answer_callback(handlers.bot, call.id, "Send the key as your next message.")
+    telegram_api.answer_callback(handlers.bot, call.id, i18n.t("ai.ask_key_cb"))
     prompt_for_key(call.message.chat.id, ai_service.active_provider())
 
 
@@ -347,12 +326,11 @@ def prompt_for_key(chat_id: int, provider: providers.Provider) -> None:
     )
     hint = ""
     if provider.key_url:
-        hint = (f"\n\n🔑 Get one here: {utils.escape(provider.key_url)}"
-                + ("  (free — no credit card)" if provider.free_tier else ""))
+        hint = (i18n.t("ai.key_url_hint", url=utils.escape(provider.key_url))
+                + (i18n.t("ai.key_url_free") if provider.free_tier else ""))
     handlers.bot.send_message(
         chat_id,
-        f"🔑 Send the <b>{utils.escape(provider.label)}</b> API key as your next message "
-        f"(or /cancel).\n\n<i>I delete the message right after reading it.</i>{hint}",
+        i18n.t("ai.ask_key", label=utils.escape(provider.label), hint=hint),
         parse_mode="HTML",
     )
 
@@ -365,15 +343,17 @@ def _free_switch(call, provider_id: str) -> None:
     ai_service.set_provider(provider.id)
     if not ai_service.has_explicit_model(provider.id) and provider.default_model:
         ai_service.set_model(provider.default_model, provider.id)
-    telegram_api.answer_callback(handlers.bot, call.id, f"Switched to {provider.label}")
+    telegram_api.answer_callback(handlers.bot, call.id,
+                                 i18n.t("ai.switched", label=provider.label))
     _edit_or_send(call, _provider_detail_text(provider),
                   keyboards.ai_provider_actions(provider.id, provider.key_required))
     chat_id = call.message.chat.id
     if provider.key_required:
         prompt_for_key(chat_id, provider)
     else:
-        handlers.bot.send_message(chat_id, f"✅ <b>{utils.escape(provider.label)}</b> needs no "
-                                           "API key. Testing it now…", parse_mode="HTML")
+        handlers.bot.send_message(
+            chat_id, i18n.t("ai.no_key_needed_test", label=utils.escape(provider.label)),
+            parse_mode="HTML")
         run_test(chat_id)
 
 
@@ -382,24 +362,18 @@ def _ask_for_model(call, provider_id: str | None = None) -> None:
     database.set_owner_pending_input(
         security.operator_id(), "ai_model", {"provider": provider.id}, PENDING_TTL_MINUTES
     )
-    telegram_api.answer_callback(handlers.bot, call.id, "Type the model name.")
+    telegram_api.answer_callback(handlers.bot, call.id, i18n.t("ai.ask_model_cb"))
     handlers.bot.send_message(
-        call.message.chat.id,
-        f"🧠 Send the model name for <b>{utils.escape(provider.label)}</b> "
-        "(e.g. <code>gpt-4.1-mini</code>, <code>gemini-2.5-flash</code>), or /cancel.",
+        call.message.chat.id, i18n.t("ai.ask_model", label=utils.escape(provider.label)),
         parse_mode="HTML",
     )
 
 
 def _ask_for_base_url(call) -> None:
     database.set_owner_pending_input(security.operator_id(), "ai_base_url", {}, PENDING_TTL_MINUTES)
-    telegram_api.answer_callback(handlers.bot, call.id, "Send the base URL.")
-    handlers.bot.send_message(
-        call.message.chat.id,
-        "🌐 Send the base URL of your OpenAI-compatible endpoint "
-        "(e.g. <code>http://localhost:1234/v1</code>), or /cancel.",
-        parse_mode="HTML",
-    )
+    telegram_api.answer_callback(handlers.bot, call.id, i18n.t("ai.ask_base_url_cb"))
+    handlers.bot.send_message(call.message.chat.id, i18n.t("ai.ask_base_url"),
+                              parse_mode="HTML")
 
 
 def _set_model_from_command(message) -> None:
@@ -407,15 +381,13 @@ def _set_model_from_command(message) -> None:
     if not model:
         handlers.bot.send_message(
             message.chat.id,
-            f"Current model: <code>{utils.escape(ai_service.active_model_label())}</code>\n"
-            "Usage: <code>/aimodel &lt;model-name&gt;</code>",
+            i18n.t("ai.aimodel.usage", model=utils.escape(ai_service.active_model_label())),
             parse_mode="HTML",
         )
         return
     ai_service.set_model(model)
     handlers.bot.send_message(
-        message.chat.id,
-        f"✅ Model set to <code>{utils.escape(model)}</code>. Use /aitest to verify it.",
+        message.chat.id, i18n.t("ai.aimodel.set", model=utils.escape(model)),
         parse_mode="HTML",
     )
 
@@ -429,20 +401,19 @@ def apply_pending(message, kind: str, context: dict) -> None:
     raw = (getattr(message, "text", "") or "").strip()
     chat_id = message.chat.id
     if not raw:
-        return handlers.bot.send_message(chat_id, "Nothing received — cancelled. ✖")
+        return handlers.bot.send_message(chat_id, i18n.t("ai.pending.nothing"))
 
     if kind == "ai_key":
         _apply_key(chat_id, raw, context.get("provider"), message_id=message.message_id)
     elif kind == "ai_model":
         ai_service.set_model(raw, context.get("provider"))
         handlers.bot.send_message(
-            chat_id, f"✅ Model set to <code>{utils.escape(raw)}</code>.\n"
-                     "Use /aitest to verify.", parse_mode="HTML")
+            chat_id, i18n.t("ai.pending.model_set", model=utils.escape(raw)),
+            parse_mode="HTML")
     elif kind == "ai_base_url":
         ai_service.set_base_url(raw)
         handlers.bot.send_message(
-            chat_id, f"✅ Base URL saved: <code>{utils.escape(raw)}</code>.\n"
-                     "Send the model name next with /aimodel, then /aitest.",
+            chat_id, i18n.t("ai.pending.base_url_set", url=utils.escape(raw)),
             parse_mode="HTML")
 
 
@@ -455,13 +426,13 @@ def _apply_key(chat_id: int, key: str, provider_id: str | None = None,
             handlers.bot.delete_message(chat_id, message_id)
         except Exception:
             log.debug("could not delete the key message", exc_info=True)
-    handlers.bot.send_message(chat_id, f"🔎 Checking the key with {provider.label}…")
+    handlers.bot.send_message(chat_id, i18n.t("ai.checking_key", label=provider.label))
     result = ai_service.check_key(provider.id, key)
     if not result.ok:
         handlers.bot.send_message(
             chat_id,
-            _failure_text(result, f"⚠️ <b>{utils.escape(provider.label)}</b> did not accept "
-                                  "this key"),
+            _failure_text(result, i18n.t("ai.key_rejected",
+                                         label=utils.escape(provider.label))),
             parse_mode="HTML",
             reply_markup=keyboards.ai_free_switch(result.suggestions) if result.suggestions else None,
         )
@@ -469,9 +440,9 @@ def _apply_key(chat_id: int, key: str, provider_id: str | None = None,
     ai_service.store_api_key(key, provider.id)
     handlers.bot.send_message(
         chat_id,
-        f"✅ <b>{utils.escape(provider.label)}</b> connected.\n"
-        f"{utils.escape(result.message)}\n\n"
-        f"Model: <code>{utils.escape(ai_service.active_model(provider.id))}</code>",
+        i18n.t("ai.connected", label=utils.escape(provider.label),
+               message=utils.escape(result.message),
+               model=utils.escape(ai_service.active_model(provider.id))),
         parse_mode="HTML",
     )
     _send_model_picker(chat_id, provider.id)
@@ -481,11 +452,11 @@ def _failure_text(result, title: str) -> str:
     """Owner-facing failure card: what happened, then how to fix it."""
     lines = [title, "", utils.escape(result.message)]
     if result.hints:
-        lines += ["", "<b>How to fix it</b>"]
+        lines += ["", i18n.t("ai.how_to_fix")]
         lines += [f"• {utils.escape(hint)}" for hint in result.hints]
     if result.suggestions:
         names = ", ".join(p.label for p in result.suggestions)
-        lines += ["", f"Or switch to a free provider in one tap 👇 ({utils.escape(names)})"]
+        lines += ["", i18n.t("ai.switch_hint", names=utils.escape(names))]
     return "\n".join(lines)
 
 
@@ -493,28 +464,26 @@ def load_live_models(chat_id: int, *, call=None, provider_id: str | None = None)
     """Fetch the real model catalogue for the stored key (fixes wrong model names)."""
     provider = providers.get_or_default(provider_id or ai_service.active_provider_id())
     if call is not None:
-        telegram_api.answer_callback(handlers.bot, call.id, "Loading models…")
+        telegram_api.answer_callback(handlers.bot, call.id, i18n.t("ai.loading_models"))
     handlers.bot.send_message(
-        chat_id, f"🔄 Asking <b>{utils.escape(provider.label)}</b> which models your "
-                 "key can use…", parse_mode="HTML")
+        chat_id, i18n.t("ai.asking_models", label=utils.escape(provider.label)),
+        parse_mode="HTML")
     try:
         models = ai_service.list_models(provider.id)
     except ai_service.AIServiceError as e:
         lines = [f"⚠️ {utils.escape(e.owner_message)}"]
         lines += [f"• {utils.escape(hint)}" for hint in e.hints]
-        lines.append("You can still type a model name: /aimodel &lt;name&gt;")
+        lines.append(i18n.t("ai.still_type_model"))
         return handlers.bot.send_message(chat_id, "\n".join(lines), parse_mode="HTML")
     current = ai_service.active_model(provider.id)
     if not models:
         return handlers.bot.send_message(
-            chat_id,
-            f"{utils.escape(provider.label)} did not return a model list. Type the name "
-            "instead: /aimodel &lt;name&gt;", parse_mode="HTML")
+            chat_id, i18n.t("ai.no_model_list", label=utils.escape(provider.label)),
+            parse_mode="HTML")
     handlers.bot.send_message(
         chat_id,
-        f"🧠 <b>{len(models)} models</b> your key can run on "
-        f"{utils.escape(provider.label)}\nCurrent: <code>{utils.escape(current)}</code>\n"
-        "Tap one to use it:",
+        i18n.t("ai.models_found", count=len(models),
+               label=utils.escape(provider.label), current=utils.escape(current)),
         parse_mode="HTML",
         reply_markup=keyboards.ai_models(models, current, can_refresh=False),
     )
@@ -527,8 +496,8 @@ def _send_model_picker(chat_id: int, provider_id: str) -> None:
         return
     handlers.bot.send_message(
         chat_id,
-        f"🧠 Choose a model for {utils.escape(provider.label)} "
-        f"(current: <code>{utils.escape(ai_service.active_model(provider.id))}</code>):",
+        i18n.t("ai.choose_model", label=utils.escape(provider.label),
+               current=utils.escape(ai_service.active_model(provider.id))),
         parse_mode="HTML",
         reply_markup=keyboards.ai_models(models, ai_service.active_model(provider.id)),
     )
@@ -538,7 +507,7 @@ def _send_model_picker(chat_id: int, provider_id: str) -> None:
 # Connection test
 # =============================================================================
 def run_test(chat_id: int) -> None:
-    handlers.bot.send_message(chat_id, "🧪 Testing the connection (may take a few seconds)…")
+    handlers.bot.send_message(chat_id, i18n.t("ai.testing_msg"))
     result = ai_service.check_connection()
     if result.ok:
         handlers.bot.send_message(
@@ -550,7 +519,7 @@ def run_test(chat_id: int) -> None:
         return
     handlers.bot.send_message(
         chat_id,
-        _failure_text(result, "⚠️ <b>The test failed</b>") + "\n\n" +
+        _failure_text(result, i18n.t("ai.test_failed")) + "\n\n" +
         "\n".join(utils.escape(line) for line in ai_service.status_lines()),
         parse_mode="HTML",
         reply_markup=keyboards.ai_free_switch(result.suggestions) if result.suggestions else None,

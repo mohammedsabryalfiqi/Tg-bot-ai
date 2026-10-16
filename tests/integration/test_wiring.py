@@ -145,6 +145,27 @@ def _dm(text: str, user_id: int = OWNER_ID, update_id: int = 1, chat_id: int | N
     })
 
 
+def _callback(data: str, user_id: int = OWNER_ID, chat_id: int | None = None,
+              message_id: int = 4242, update_id: int = 900):
+    """A button press by the owner (inline keyboard callback)."""
+    return _update({
+        "update_id": update_id,
+        "callback_query": {
+            "id": f"cb{update_id}",
+            "from": {"id": user_id, "is_bot": False, "first_name": "Owner"},
+            "chat_instance": "1",
+            "data": data,
+            "message": {
+                "message_id": message_id,
+                "date": 0,
+                "chat": {"id": chat_id or user_id, "type": "private"},
+                "from": {"id": 1, "is_bot": True, "first_name": "Bot"},
+                "text": "approval card",
+            },
+        },
+    })
+
+
 def _business_message(text: str, message_id: int = 50, chat_id: int = 5,
                       user_id: int = 10, bcid: str = "bc1", update_id: int = 100):
     return _update({
@@ -205,6 +226,145 @@ def test_ai_screen_renders(wired):
     security.init(wired.bot, OWNER_ID)
     wired.bot.process_new_updates([_dm("/ai", update_id=7)])
     assert any("AI provider" in text for text in wired.rec.texts(OWNER_ID))
+
+
+def _direct_message(text: str, user_id: int = 4242, update_id: int = 300,
+                    message_id: int | None = None, chat_id: int | None = None):
+    """A plain private message sent to the bot itself (no Business connection)."""
+    return _update({
+        "update_id": update_id,
+        "message": {
+            "message_id": message_id or update_id,
+            "date": 0,
+            "chat": {"id": chat_id or user_id, "type": "private"},
+            "from": {"id": user_id, "is_bot": False, "first_name": "Mona"},
+            "text": text,
+        },
+    })
+
+
+def _customer_kwargs(rec, chat_id: int) -> list[dict]:
+    return [m[2] for m in rec.messages if m[0] == chat_id]
+
+
+# --- direct messages (the bot's own private chat) -----------------------------
+def test_direct_message_is_answered_end_to_end(wired_owned, monkeypatch):
+    wired_owned.db.set_setting("ai_provider", "pollinations")   # usable, needs no key
+    wired_owned.db.set_setting("auto_reply_enabled", True)
+    wired_owned.db.set_setting("approval_mode_enabled", False)
+    wired_owned.db.set_setting("reply_debounce_seconds", 0.0)
+    monkeypatch.setattr("services.ai_service.chat", lambda messages: "أهلاً بيك 👋")
+
+    wired_owned.bot.process_new_updates([_direct_message("السلام عليكم")])
+
+    assert "أهلاً بيك 👋" in wired_owned.rec.texts(4242)
+    assert wired_owned.db.count_messages(direction="out", role="assistant") == 1
+    # The chat is stored under the reserved direct connection, hidden from stats.
+    assert wired_owned.db.get_business_connection(telegram_api.DIRECT_CONNECTION_ID)
+
+
+def test_direct_message_never_carries_a_business_connection_id(wired_owned, monkeypatch):
+    """Telegram rejects a connection id that was never granted: the synthetic
+    'direct' one must never reach the wire."""
+    wired_owned.db.set_setting("ai_provider", "pollinations")
+    wired_owned.db.set_setting("auto_reply_enabled", True)
+    wired_owned.db.set_setting("approval_mode_enabled", False)
+    wired_owned.db.set_setting("reply_debounce_seconds", 0.0)
+    monkeypatch.setattr("services.ai_service.chat", lambda messages: "hi back")
+
+    wired_owned.bot.process_new_updates([_direct_message("hello")])
+
+    sent = _customer_kwargs(wired_owned.rec, 4242)
+    assert sent and all("business_connection_id" not in kw for kw in sent)
+
+
+def test_direct_draft_mode_creates_an_approval_the_owner_can_send(wired_owned, monkeypatch):
+    wired_owned.db.set_setting("ai_provider", "pollinations")
+    wired_owned.db.set_setting("auto_reply_enabled", True)
+    wired_owned.db.set_setting("approval_mode_enabled", True)
+    wired_owned.db.set_setting("reply_debounce_seconds", 0.0)
+    monkeypatch.setattr("services.ai_service.chat", lambda messages: "مسودة رد")
+
+    wired_owned.bot.process_new_updates([_direct_message("عندكم إيه؟")])
+    assert wired_owned.db.count_pending_approvals() == 1
+    assert wired_owned.rec.texts(4242) == []          # waits for the owner's tap
+
+    wired_owned.bot.process_new_updates([_callback("apr:send:1")])
+
+    assert "مسودة رد" in wired_owned.rec.texts(4242)
+    assert wired_owned.db.count_pending_approvals() == 0
+
+
+def test_direct_switch_off_restores_the_managed_notice(wired_owned):
+    wired_owned.db.set_setting("direct_reply_enabled", False)
+
+    wired_owned.bot.process_new_updates([_direct_message("أيوه؟")])
+
+    assert any("managed Telegram Business assistant" in text
+               for text in wired_owned.rec.texts(4242))
+
+
+def test_direct_message_without_an_ai_key_gets_the_managed_notice(wired_owned, monkeypatch):
+    wired_owned.db.set_setting("ai_provider", "openai")     # no key stored
+    wired_owned.db.set_setting("auto_reply_enabled", True)
+    monkeypatch.setattr("services.ai_service.chat",
+                        lambda messages: pytest.fail("the model must not be called"))
+
+    wired_owned.bot.process_new_updates([_direct_message("مرحبا")])
+
+    assert any("managed Telegram Business assistant" in text
+               for text in wired_owned.rec.texts(4242))
+
+
+def test_language_command_switches_and_persists(wired_owned):
+    wired_owned.bot.process_new_updates([_dm("/language ar", update_id=320)])
+    assert wired_owned.db.get_str("ui_language") == "ar"
+
+    wired_owned.rec.messages.clear()
+    wired_owned.bot.process_new_updates([_dm("/lang en", update_id=321)])
+    assert wired_owned.db.get_str("ui_language") == "en"
+
+
+# --- Arabic interface ---------------------------------------------------------
+def test_every_screen_renders_in_arabic_without_missing_keys(wired_owned, monkeypatch,
+                                                            caplog):
+    """Walk every owner screen in Arabic: no raw keys, no format warnings.
+
+    ``i18n`` logs "missing translation key: …" whenever a screen asks for a key
+    that only exists in one catalog, so a passing run means the whole interface is
+    actually translated.
+    """
+    import i18n as i18n_module
+
+    monkeypatch.setenv("BOT_LANGUAGE", "ar")
+    i18n_module.invalidate_cache()
+    wired_owned.db.set_setting("auto_reply_enabled", True)
+    wired_owned.db.set_setting("approval_mode_enabled", False)
+
+    commands = ["/start", "/help", "/setup", "/mode", "/direct", "/language",
+                "/ai", "/freeai", "/faq", "/kb", "/status", "/health",
+                "/settings", "/chats", "/stats", "/instructions", "/connections"]
+    rendered: list[str] = []
+    with caplog.at_level("WARNING"):
+        for index, command in enumerate(commands, start=400):
+            wired_owned.rec.messages.clear()
+            wired_owned.bot.process_new_updates([_dm(command, update_id=index)])
+            rendered += wired_owned.rec.texts(OWNER_ID)
+            assert rendered, f"{command} produced no reply"
+
+        # A setup step screen (the buttons on the checklist).
+        wired_owned.bot.process_new_updates([_callback("tool:setup_step:ai", update_id=500)])
+        rendered += wired_owned.rec.texts(OWNER_ID)
+
+    problems = [record.getMessage() for record in caplog.records
+                if "missing translation" in record.getMessage()
+                or "could not be formatted" in record.getMessage()]
+    assert problems == []
+
+    joined = " ".join(rendered)
+    arabic = sum(1 for ch in joined if "\u0600" <= ch <= "\u06ff")
+    assert arabic > 200, "the Arabic screens should be mostly Arabic text"
+    assert "BotFather" in joined          # platform names stay as they are
 
 
 # --- business pipeline -------------------------------------------------------

@@ -12,6 +12,8 @@ New code should import ``services.ai_service`` directly.
 
 from __future__ import annotations
 
+import i18n
+
 from services import providers as _providers
 from services.ai_service import (  # noqa: F401  (re-exported on purpose)
     AIServiceError,
@@ -39,6 +41,11 @@ DEFAULT_EMBED_MODEL = "text-embedding-3-small"
 GENERIC_CUSTOMER_APOLOGY = (
     "Sorry, I'm having trouble responding right now. Someone will get back to you shortly."
 )
+
+
+def generic_customer_apology() -> str:
+    """Localised last-resort apology for a customer (falls back to English)."""
+    return i18n.t("biz.apology_default", default=GENERIC_CUSTOMER_APOLOGY)
 
 
 def get_client():  # pragma: no cover - compat shim, no SDK client anymore

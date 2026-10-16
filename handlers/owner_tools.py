@@ -20,6 +20,7 @@ from pathlib import Path
 
 import database
 import handlers
+import i18n
 import keyboards
 import security
 import telegram_api
@@ -92,12 +93,12 @@ def set_mode(mode: str) -> str:
     return mode
 
 
-MODE_TEXT = {
-    "auto": "🟢 <b>Auto-reply</b> — the bot answers customers immediately.",
-    "draft": "📝 <b>Draft mode</b> — the bot writes the reply and waits for your tap "
-             "(Send / Edit / Reject). Nothing reaches the customer on its own.",
-    "off": "🔴 <b>Off</b> — the bot stays silent; you get a notification per message.",
-}
+_MODE_KEYS = {"auto": "tool.mode.auto", "draft": "tool.mode.draft", "off": "tool.mode.off"}
+
+
+def mode_text(mode: str) -> str:
+    """Localised one-line explanation of a reply mode."""
+    return i18n.t(_MODE_KEYS.get(mode, "tool.mode.off"))
 
 
 def cmd_mode(message) -> None:
@@ -105,13 +106,12 @@ def cmd_mode(message) -> None:
     if arg in ("auto", "draft", "off"):
         mode = set_mode(arg)
         return handlers.bot.send_message(
-            message.chat.id, f"{MODE_TEXT[mode]}\n\nMode: <b>{mode}</b>", parse_mode="HTML",
-            reply_markup=keyboards.mode_keyboard(mode))
+            message.chat.id, i18n.t("tool.mode.set", text=mode_text(mode), mode=mode),
+            parse_mode="HTML", reply_markup=keyboards.mode_keyboard(mode))
     mode = current_mode()
     handlers.bot.send_message(
         message.chat.id,
-        f"Current mode: {MODE_TEXT[mode]}\n\n"
-        "Choose a mode (or use <code>/mode auto|draft|off</code>):",
+        i18n.t("tool.mode.current", text=mode_text(mode)),
         parse_mode="HTML",
         reply_markup=keyboards.mode_keyboard(mode),
     )
@@ -123,20 +123,17 @@ def cmd_mode(message) -> None:
 def cmd_chats(message) -> None:
     rows = database.list_recent_customer_chats(limit=10)
     if not rows:
-        return handlers.bot.send_message(
-            message.chat.id,
-            "No customer chats yet. Once someone messages your business account "
-            "(with the bot connected in Telegram Business → Chatbots), they appear here.",
-        )
+        return handlers.bot.send_message(message.chat.id, i18n.t("tool.chats.empty"))
     buttons = []
     for row in rows:
         name = business_service.customer_display_name(row["business_connection_id"],
                                                       row["customer_chat_id"])
-        buttons.append({"label": f"{name} · {row['message_count']} msgs",
+        buttons.append({"label": i18n.t("tool.chats.label", name=name,
+                                        count=row["message_count"]),
                         "chat_id": row["customer_chat_id"]})
     handlers.bot.send_message(
         message.chat.id,
-        "🗂 <b>Recent customer chats</b>\nTap one to see the last messages.",
+        i18n.t("tool.chats.title"),
         parse_mode="HTML",
         reply_markup=keyboards.chats_list(buttons),
     )
@@ -145,17 +142,21 @@ def cmd_chats(message) -> None:
 def _transcript_text(bcid: str, chat_id: int) -> str:
     name = business_service.customer_display_name(bcid, chat_id)
     rows = database.get_recent_messages(bcid, chat_id, TRANSCRIPT_LIMIT)
-    lines = [f"💬 <b>{utils.escape(name)}</b> · chat <code>{chat_id}</code>"]
+    lines = [i18n.t("tool.transcript.title", name=utils.escape(name), chat_id=chat_id)]
     if not rows:
-        lines.append("\n<i>No stored messages (history starts when the bot is running).</i>")
+        lines.append(i18n.t("tool.transcript.empty"))
     for row in rows:
-        who = "👤 customer" if row["direction"] == "in" else "🤖 bot"
+        who = i18n.t("tool.transcript.customer") if row["direction"] == "in" \
+            else i18n.t("tool.transcript.bot")
         text = utils.escape((row["content"] or "")[:400])
         lines.append(f"\n<b>{who}</b> · {utils.escape(row['created_at'][11:16])}\n{text}")
     paused = business_service.is_chat_paused(bcid, chat_id)
     lines.append("")
-    lines.append(f"Auto-reply for this chat: <b>{'paused ⏸' if paused else 'active ▶️'}</b>")
-    lines.append(f"Reply manually: <code>/reply {chat_id} your text</code>")
+    lines.append(i18n.t(
+        "tool.transcript.pause_state",
+        state=i18n.t("tool.transcript.paused") if paused else i18n.t("tool.transcript.active"),
+    ))
+    lines.append(i18n.t("tool.transcript.reply_hint", chat_id=chat_id))
     return "\n".join(lines)
 
 
@@ -164,11 +165,10 @@ def cmd_chat(message) -> None:
     try:
         chat_id = int(raw)
     except ValueError:
-        return handlers.bot.send_message(message.chat.id, "Usage: /chat <chat_id> …")
+        return handlers.bot.send_message(message.chat.id, i18n.t("tool.chat.usage"))
     bcid = business_service.find_bcid_for_chat(chat_id)
     if bcid is None:
-        return handlers.bot.send_message(
-            message.chat.id, "I have no messages for that chat id yet.")
+        return handlers.bot.send_message(message.chat.id, i18n.t("tool.chat.none"))
     handlers.bot.send_message(message.chat.id, _transcript_text(bcid, chat_id), parse_mode="HTML",
                               reply_markup=keyboards.chat_actions(
                                   chat_id, business_service.is_chat_paused(bcid, chat_id)))
@@ -178,22 +178,15 @@ def cmd_reply(message) -> None:
     raw = _args(message)
     parts = raw.split(maxsplit=1)
     if not parts or not parts[0].lstrip("-").isdigit():
-        return handlers.bot.send_message(
-            message.chat.id,
-            "Usage: <code>/reply &lt;chat_id&gt; the message</code>\n"
-            "Send only the chat id and I'll ask you for the text.\n"
-            "Tip: the chat id is shown in every notification and in /chats.",
-            parse_mode="HTML")
+        return handlers.bot.send_message(message.chat.id, i18n.t("tool.reply.usage"),
+                                         parse_mode="HTML")
     chat_id = int(parts[0])
     if len(parts) < 2 or not parts[1].strip():
         # No text yet: park the target chat and let the owner type the message.
         database.set_owner_pending_input(security.operator_id(), "reply_to_chat",
                                         {"chat_id": chat_id}, TAKEOVER_INPUT_TTL_MINUTES)
         return handlers.bot.send_message(
-            message.chat.id,
-            f"✍️ Send the message you want me to deliver to chat <code>{chat_id}</code>.\n"
-            "<i>(/cancel to abort)</i>",
-            parse_mode="HTML")
+            message.chat.id, i18n.t("tool.reply.ask", chat_id=chat_id), parse_mode="HTML")
     _send_owner_reply(message.chat.id, chat_id, parts[1].strip())
 
 
@@ -201,27 +194,23 @@ def _send_owner_reply(owner_chat_id: int, chat_id: int, text: str) -> None:
     """Deliver an owner-written message from the business account (takeover)."""
     bcid = business_service.find_bcid_for_chat(chat_id)
     if bcid is None:
-        return handlers.bot.send_message(owner_chat_id, "Unknown chat id.")
+        return handlers.bot.send_message(owner_chat_id, i18n.t("tool.reply.unknown_chat"))
     conn = business_service.get_connection(bcid)
     if conn is None or not (conn["is_enabled"] and conn["can_reply"]):
-        return handlers.bot.send_message(
-            owner_chat_id, "The business connection cannot reply right now.")
+        return handlers.bot.send_message(owner_chat_id, i18n.t("tool.reply.cannot_reply"))
     try:
         telegram_api.send_reply(handlers.bot, chat_id, text, business_connection_id=bcid,
                                 sanitize=False)
     except Exception as e:
         return handlers.bot.send_message(
-            owner_chat_id, f"Could not send ({type(e).__name__}). Check the chat.")
+            owner_chat_id, i18n.t("tool.reply.failed", error=type(e).__name__))
     database.insert_message(bcid, chat_id, None, "out", "owner", text)
     memory_service.append_exchange(bcid, chat_id, "[owner replied manually]", text)
     # Manual reply = takeover: keep the AI out of this chat for a while.
     minutes = database.get_int("owner_takeover_pause_minutes")
     business_service.pause_chat(bcid, chat_id, reason="owner_takeover", minutes=minutes)
     handlers.bot.send_message(
-        owner_chat_id,
-        f"✅ Sent from your business account.\n"
-        f"Auto-reply for this chat is paused for {minutes} min.",
-        parse_mode="HTML")
+        owner_chat_id, i18n.t("tool.reply.sent", minutes=minutes), parse_mode="HTML")
 
 
 def apply_pending(message, kind: str, context: dict) -> None:
@@ -240,7 +229,7 @@ def apply_pending(message, kind: str, context: dict) -> None:
         chat_id = 0
     text = (getattr(message, "text", "") or "").strip()
     if not chat_id or not text:
-        return handlers.bot.send_message(message.chat.id, "Reply cancelled — nothing sent.")
+        return handlers.bot.send_message(message.chat.id, i18n.t("tool.reply.cancelled"))
     _send_owner_reply(message.chat.id, chat_id, text)
 
 
@@ -251,21 +240,19 @@ def _do_pause_command(message, pause: bool) -> None:
     except ValueError:
         return handlers.bot.send_message(
             message.chat.id,
-            f"Usage: /{'takeover' if pause else 'handback'} <chat_id>")
+            i18n.t("tool.pause.usage", command="takeover" if pause else "handback"))
     bcid = business_service.find_bcid_for_chat(chat_id)
     if bcid is None:
-        return handlers.bot.send_message(message.chat.id, "Unknown chat id.")
+        return handlers.bot.send_message(message.chat.id, i18n.t("tool.reply.unknown_chat"))
     if pause:
         business_service.pause_chat(bcid, chat_id, reason="manual_pause", minutes=None)
         handlers.bot.send_message(
-            message.chat.id, f"⏸ The bot will not answer chat <code>{chat_id}</code> "
-                             "until you /handback.", parse_mode="HTML")
+            message.chat.id, i18n.t("tool.pause.done", chat_id=chat_id), parse_mode="HTML")
     else:
         ok = business_service.resume_chat(bcid, chat_id)
         handlers.bot.send_message(
             message.chat.id,
-            ("▶️ The bot is answering that chat again." if ok
-             else "That chat was not paused."),
+            i18n.t("tool.pause.resumed") if ok else i18n.t("tool.pause.not_paused"),
             parse_mode="HTML")
 
 
@@ -275,23 +262,30 @@ def _do_pause_command(message, pause: bool) -> None:
 def cmd_stats(message) -> None:
     day_ago = utils.future_iso(-60 * 24)
     week_ago = utils.future_iso(-60 * 24 * 7)
-    conns = database.list_business_connections()
+    conns = business_service.real_connections()
     lines = [
-        "📈 <b>Statistics</b>",
+        i18n.t("tool.stats.title"),
         "",
-        f"Customers: <b>{database.count_customers()}</b>",
-        f"Messages received · 24h: <b>{database.count_messages(direction='in', since_iso=day_ago)}</b>"
-        f" · 7d: <b>{database.count_messages(direction='in', since_iso=week_ago)}</b>"
-        f" · total: <b>{database.count_messages(direction='in')}</b>",
-        f"AI replies · 24h: <b>{database.count_ai_replies(day_ago)}</b>"
-        f" · 7d: <b>{database.count_ai_replies(week_ago)}</b>"
-        f" · total: <b>{database.count_ai_replies()}</b>",
+        i18n.t("tool.stats.customers", count=database.count_customers()),
+        i18n.t("tool.stats.messages",
+               day=database.count_messages(direction="in", since_iso=day_ago),
+               week=database.count_messages(direction="in", since_iso=week_ago),
+               total=database.count_messages(direction="in")),
+        i18n.t("tool.stats.replies",
+               day=database.count_ai_replies(day_ago),
+               week=database.count_ai_replies(week_ago),
+               total=database.count_ai_replies()),
         "",
-        f"Mode: <b>{current_mode()}</b> · Pending approvals: <b>{database.count_pending_approvals()}</b>",
-        f"Paused chats: <b>{len(database.list_active_pauses())}</b>",
-        f"Knowledge base: <b>{len(database.list_kb_items())}</b> items",
-        f"Quick answers: <b>{faq_service.count()}</b>",
-        f"Business connections: <b>{len(conns)}</b>",
+        i18n.t("tool.stats.summary", mode=current_mode(),
+               pending=database.count_pending_approvals()),
+        i18n.t("tool.stats.paused", count=len(database.list_active_pauses())),
+        i18n.t("tool.stats.kb", count=len(database.list_kb_items())),
+        i18n.t("tool.stats.faq", count=faq_service.count()),
+        i18n.t("tool.stats.connections", count=len(conns)),
+        i18n.t("tool.stats.direct",
+               state=i18n.t("own.status.direct_on")
+               if database.get_bool("direct_reply_enabled")
+               else i18n.t("own.status.direct_off")),
     ]
     handlers.bot.send_message(message.chat.id, "\n".join(lines), parse_mode="HTML")
 
@@ -301,55 +295,59 @@ def cmd_health(message) -> None:
 
 
 def health_report() -> str:
-    lines = ["❤️ <b>Health check</b>", ""]
+    lines = [i18n.t("tool.health.title"), ""]
 
     # Token / API reachability
     try:
         me = handlers.bot.get_me()
-        lines.append(f"✅ Telegram API reachable — @{utils.escape(me.username)}")
+        lines.append(i18n.t("tool.health.telegram_ok", username=utils.escape(me.username)))
     except Exception as e:
-        lines.append(f"❌ Telegram API error: {utils.escape(type(e).__name__)}")
+        lines.append(i18n.t("tool.health.telegram_error", error=utils.escape(type(e).__name__)))
 
     # AI provider
     provider = ai_service.active_provider()
     if ai_service.is_ready():
-        lines.append(f"✅ AI ready — {utils.escape(ai_service.backend_label())} · "
-                     f"<code>{utils.escape(ai_service.active_model_label())}</code>")
+        lines.append(i18n.t("tool.health.ai_ok",
+                            backend=utils.escape(ai_service.backend_label()),
+                            model=utils.escape(ai_service.active_model_label())))
     else:
-        lines.append("❌ AI not configured — open /ai to add a key or pick a provider.")
-    lines.append(f"ℹ️ Cost: {utils.escape(ai_service.cost_label(provider))}")
-    lines.append(f"ℹ️ Embeddings: "
-                 f"{'available' if ai_service.supports_embeddings() else 'not available (keyword search)'}")
+        lines.append(i18n.t("tool.health.ai_missing"))
+    lines.append(i18n.t("tool.health.cost", cost=utils.escape(ai_service.cost_label(provider))))
+    lines.append(i18n.t(
+        "tool.health.embeddings",
+        state=i18n.t("tool.health.embeddings_yes") if ai_service.supports_embeddings()
+        else i18n.t("tool.health.embeddings_no"),
+    ))
     if not ai_service.is_ready() or providers.needs_credit(provider.id):
-        lines.append("💡 Key rejected or no balance? /freeai lists providers that cost "
-                     "nothing (Google Gemini, Groq, Cerebras, Mistral…).")
+        lines.append(i18n.t("tool.health.freeai_hint"))
 
     # Business connection
-    conns = database.list_business_connections()
+    conns = business_service.real_connections()
+    if database.get_bool("direct_reply_enabled"):
+        lines.append(i18n.t("tool.health.direct_ready"))
     if not conns:
-        lines.append("❌ No business connection — connect the bot in Telegram → Settings → "
-                     "Business → Chatbots.")
+        lines.append(i18n.t("tool.health.no_connection"))
     else:
         for conn in conns:
             ok = bool(conn["is_enabled"]) and bool(conn["can_reply"])
             icon = "✅" if ok else "⚠️"
-            lines.append(
-                f"{icon} Connection <code>{utils.escape(conn['business_connection_id'][:10])}…</code> "
-                f"· enabled: {bool(conn['is_enabled'])} · can reply: {bool(conn['can_reply'])}")
+            lines.append(i18n.t(
+                "tool.health.connection_row", icon=icon,
+                id=utils.escape(conn["business_connection_id"][:10]),
+                enabled=bool(conn["is_enabled"]), can_reply=bool(conn["can_reply"])))
             if not conn["can_reply"]:
-                lines.append("   ↳ Enable “Allow bot to reply to messages” for the bot in "
-                             "Telegram Business → Chatbots.")
+                lines.append(i18n.t("tool.health.enable_reply"))
 
     # Storage
     try:
         usage = shutil.disk_usage(Path(handlers.cfg.db_path).parent)
         free_mb = usage.free // (1024 * 1024)
-        lines.append(f"✅ Disk free: {free_mb} MB")
+        lines.append(i18n.t("tool.health.disk", mb=free_mb))
     except Exception:
         pass
-    lines.append(f"ℹ️ Mode: <b>{current_mode()}</b> · Pending approvals: "
-                 f"<b>{database.count_pending_approvals()}</b>")
-    lines.append("ℹ️ Test the AI end-to-end with /aitest.")
+    lines.append(i18n.t("tool.health.summary", mode=current_mode(),
+                        pending=database.count_pending_approvals()))
+    lines.append(i18n.t("tool.health.aitest_hint"))
     return "\n".join(lines)
 
 
@@ -385,8 +383,7 @@ def export_backup(chat_id: int) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     try:
         telegram_api.send_document(handlers.bot, chat_id, path,
-                                   caption="Backup: settings, quick answers, knowledge index "
-                                           "(API keys are never exported)")
+                                   caption=i18n.t("tool.export.caption"))
     finally:
         try:
             path.unlink()
@@ -409,10 +406,10 @@ def on_callback(call) -> None:
             bot.delete_message(chat_id, call.message.message_id)
         except Exception:
             pass
-        return telegram_api.answer_callback(bot, call.id, "Closed.")
+        return telegram_api.answer_callback(bot, call.id, i18n.t("tool.callback.closed"))
 
     if action == "health":
-        telegram_api.answer_callback(bot, call.id, "Checking…")
+        telegram_api.answer_callback(bot, call.id, i18n.t("tool.callback.checking"))
         bot.send_message(chat_id, health_report(), parse_mode="HTML")
         return
 
@@ -425,10 +422,11 @@ def on_callback(call) -> None:
         try:
             target = int(arg)
         except ValueError:
-            return telegram_api.answer_callback(bot, call.id, "Bad chat id.")
+            return telegram_api.answer_callback(bot, call.id, i18n.t("tool.callback.bad_chat"))
         bcid = business_service.find_bcid_for_chat(target)
         if bcid is None:
-            return telegram_api.answer_callback(bot, call.id, "No messages for that chat yet.")
+            return telegram_api.answer_callback(
+                bot, call.id, i18n.t("tool.callback.no_messages"))
         telegram_api.answer_callback(bot, call.id)
         bot.send_message(chat_id, _transcript_text(bcid, target), parse_mode="HTML",
                          reply_markup=keyboards.chat_actions(
@@ -439,17 +437,17 @@ def on_callback(call) -> None:
         try:
             target = int(arg)
         except ValueError:
-            return telegram_api.answer_callback(bot, call.id, "Bad chat id.")
+            return telegram_api.answer_callback(bot, call.id, i18n.t("tool.callback.bad_chat"))
         bcid = business_service.find_bcid_for_chat(target)
         if bcid is None:
-            return telegram_api.answer_callback(bot, call.id, "Unknown chat.")
+            return telegram_api.answer_callback(bot, call.id, i18n.t("tool.reply.unknown_chat"))
         if action == "pause":
             business_service.pause_chat(bcid, target, reason="manual_pause", minutes=None)
-            message = f"⏸ Paused chat <code>{target}</code>."
+            message = i18n.t("tool.callback.paused", chat_id=target)
         else:
             business_service.resume_chat(bcid, target)
-            message = f"▶️ Resumed chat <code>{target}</code>."
-        telegram_api.answer_callback(bot, call.id, "Done")
+            message = i18n.t("tool.callback.resumed", chat_id=target)
+        telegram_api.answer_callback(bot, call.id, i18n.t("tool.callback.done"))
         bot.send_message(chat_id, message, parse_mode="HTML")
         return
 

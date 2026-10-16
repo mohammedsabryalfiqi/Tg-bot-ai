@@ -64,6 +64,11 @@ SETTINGS_SCHEMA: dict[str, tuple[type, object]] = {
     "monitoring_mode": (bool, True),
     "max_messages_per_customer_per_hour": (int, 20),
     "public_direct_bot_chat_enabled": (bool, False),
+    # Answer the private messages people send to the BOT's own chat (no Telegram
+    # Business account needed). Gated by the same auto_reply/approval switches.
+    "direct_reply_enabled": (bool, True),
+    # Interface language of the bot itself: ar (default) | en. See i18n.py.
+    "ui_language": (str, "ar"),
     # Internal extra (not in the original spec list): allow processing of
     # non-text business messages. Off by default per spec ("text by default").
     "process_nontext_enabled": (bool, False),
@@ -105,6 +110,23 @@ SETTINGS_SCHEMA: dict[str, tuple[type, object]] = {
     # Optional canned acknowledgement for non-text messages (photo, voice, …).
     # Empty (default) = only notify the owner, never answer automatically.
     "nontext_ack_message": (str, ""),
+
+    # --- Topic rules (what the assistant must know and do) --------------------
+    # Natural-language instructions typed by the owner are turned into small,
+    # reviewable "topic rules" that are injected into every system prompt.
+    "rules_enabled": (bool, True),
+    # --- Resources the assistant may search / point people to -----------------
+    "resources_enabled": (bool, True),
+    # --- Unanswered questions (the assistant learns from what it missed) ------
+    "unanswered_enabled": (bool, True),
+    # --- Entry gates (admin toggles; both OFF by default) ---------------------
+    # Join-check: everyone must be a member of the required channels first.
+    "require_subscription_enabled": (bool, False),
+    # Telegram Stars: one paid message unlocks one answer (+ owner copy).
+    "paid_messages_enabled": (bool, False),
+    "paid_message_stars": (int, 0),         # 0 = not priced yet -> gate stays shut
+    "paid_message_free_count": (int, 0),    # free messages per user before paying
+    "gate_copy_to_owner": (bool, True),     # send the owner a copy of gated chats
 
     # --- Owner identity (claim flow when OWNER_USER_ID is not set) -------------
     "claimed_owner_user_id": (int, 0),
@@ -336,6 +358,76 @@ def _create_schema() -> None:
                 updated_at  TEXT
             );
 
+            CREATE TABLE IF NOT EXISTS topic_rules (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                tenant_id   INTEGER NOT NULL DEFAULT 0,
+                topic       TEXT NOT NULL DEFAULT '',
+                rule        TEXT NOT NULL DEFAULT '',
+                priority    INTEGER NOT NULL DEFAULT 100,
+                enabled     INTEGER NOT NULL DEFAULT 0,
+                source      TEXT NOT NULL DEFAULT 'owner',
+                batch       TEXT NOT NULL DEFAULT '',
+                hits        INTEGER NOT NULL DEFAULT 0,
+                created_at  TEXT,
+                updated_at  TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS unanswered_questions (
+                id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+                tenant_id              INTEGER NOT NULL DEFAULT 0,
+                business_connection_id TEXT,
+                customer_chat_id       INTEGER,
+                question               TEXT NOT NULL DEFAULT '',
+                answer                 TEXT,
+                status                 TEXT NOT NULL DEFAULT 'open',
+                created_at             TEXT,
+                answered_at            TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS resources (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                tenant_id   INTEGER NOT NULL DEFAULT 0,
+                kind        TEXT NOT NULL DEFAULT 'link',
+                title       TEXT NOT NULL DEFAULT '',
+                url         TEXT NOT NULL DEFAULT '',
+                notes       TEXT NOT NULL DEFAULT '',
+                enabled     INTEGER NOT NULL DEFAULT 1,
+                chars       INTEGER NOT NULL DEFAULT 0,
+                created_at  TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS required_channels (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                tenant_id   INTEGER NOT NULL DEFAULT 0,
+                chat_ref    TEXT NOT NULL,
+                title       TEXT NOT NULL DEFAULT '',
+                invite_link TEXT NOT NULL DEFAULT '',
+                kind        TEXT NOT NULL DEFAULT 'channel',
+                enabled     INTEGER NOT NULL DEFAULT 1,
+                created_at  TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS gate_checks (
+                customer_chat_id INTEGER PRIMARY KEY,
+                all_ok           INTEGER NOT NULL DEFAULT 0,
+                checked_at       TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS paid_messages (
+                id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                tenant_id         INTEGER NOT NULL DEFAULT 0,
+                customer_chat_id  INTEGER NOT NULL,
+                user_id           INTEGER,
+                payload           TEXT NOT NULL DEFAULT '',
+                charge_id         TEXT NOT NULL DEFAULT '',
+                stars             INTEGER NOT NULL DEFAULT 0,
+                message_text      TEXT NOT NULL DEFAULT '',
+                status            TEXT NOT NULL DEFAULT 'pending',
+                delivered         INTEGER NOT NULL DEFAULT 0,
+                created_at        TEXT,
+                paid_at           TEXT
+            );
+
             CREATE INDEX IF NOT EXISTS idx_messages_bc_chat_time
                 ON messages(business_connection_id, customer_chat_id, created_at);
             CREATE INDEX IF NOT EXISTS idx_memory_bc_chat_time
@@ -350,6 +442,14 @@ def _create_schema() -> None:
                 ON customers(business_connection_id, customer_chat_id);
             CREATE INDEX IF NOT EXISTS idx_faq_enabled
                 ON faq_entries(enabled, id);
+            CREATE INDEX IF NOT EXISTS idx_topic_rules_lookup
+                ON topic_rules(tenant_id, enabled, priority);
+            CREATE INDEX IF NOT EXISTS idx_unanswered_status
+                ON unanswered_questions(tenant_id, status, id);
+            CREATE INDEX IF NOT EXISTS idx_required_channels_ref
+                ON required_channels(tenant_id, chat_ref);
+            CREATE INDEX IF NOT EXISTS idx_paid_messages_chat
+                ON paid_messages(customer_chat_id, status, id);
             """
         )
         # Upgrade databases created before per-account isolation.
@@ -1292,3 +1392,400 @@ def reset_runtime_state() -> None:
             (utils.now_iso(),),
         )
     seed_default_settings()
+
+
+# =============================================================================
+# DAL — topic rules (owner instructions the assistant must follow)
+# =============================================================================
+def insert_topic_rule(topic: str, rule: str, *, priority: int = 100, enabled: bool = False,
+                      source: str = "owner", batch: str = "") -> int:
+    with write_tx() as cur:
+        cur.execute(
+            "INSERT INTO topic_rules(tenant_id, topic, rule, priority, enabled, source, "
+            "batch, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
+            (tenant_id(), topic, rule, int(priority), 1 if enabled else 0, source, batch,
+             utils.now_iso(), utils.now_iso()),
+        )
+        return int(cur.lastrowid)
+
+
+def list_topic_rules(*, enabled_only: bool = False, batch: str | None = None) -> list:
+    sql = "SELECT * FROM topic_rules WHERE tenant_id=?"
+    params: list = [tenant_id()]
+    if enabled_only:
+        sql += " AND enabled=1"
+    if batch is not None:
+        sql += " AND batch=?"
+        params.append(batch)
+    sql += " ORDER BY priority, id"
+    with read_cursor() as cur:
+        cur.execute(sql, tuple(params))
+        return cur.fetchall()
+
+
+def get_topic_rule(rule_id: int):
+    with read_cursor() as cur:
+        cur.execute("SELECT * FROM topic_rules WHERE id=? AND tenant_id=?",
+                    (rule_id, tenant_id()))
+        return cur.fetchone()
+
+
+def update_topic_rule(rule_id: int, **fields) -> bool:
+    allowed = {"topic", "rule", "priority", "enabled"}
+    updates = {k: v for k, v in fields.items() if k in allowed}
+    if not updates:
+        return False
+    if "enabled" in updates:
+        updates["enabled"] = 1 if updates["enabled"] else 0
+    sets = ", ".join(f"{key}=?" for key in updates)
+    with write_tx() as cur:
+        cur.execute(
+            f"UPDATE topic_rules SET {sets}, updated_at=? WHERE id=? AND tenant_id=?",
+            (*updates.values(), utils.now_iso(), rule_id, tenant_id()),
+        )
+        return cur.rowcount > 0
+
+
+def set_topic_rules_enabled(batch: str, enabled: bool) -> int:
+    with write_tx() as cur:
+        cur.execute(
+            "UPDATE topic_rules SET enabled=?, updated_at=? WHERE tenant_id=? AND batch=?",
+            (1 if enabled else 0, utils.now_iso(), tenant_id(), batch),
+        )
+        return cur.rowcount
+
+
+def delete_topic_rule(rule_id: int) -> int:
+    with write_tx() as cur:
+        cur.execute("DELETE FROM topic_rules WHERE id=? AND tenant_id=?", (rule_id, tenant_id()))
+        return cur.rowcount
+
+
+def delete_topic_rules_batch(batch: str) -> int:
+    with write_tx() as cur:
+        cur.execute("DELETE FROM topic_rules WHERE tenant_id=? AND batch=?",
+                    (tenant_id(), batch))
+        return cur.rowcount
+
+
+def clear_topic_rules() -> int:
+    with write_tx() as cur:
+        cur.execute("DELETE FROM topic_rules WHERE tenant_id=?", (tenant_id(),))
+        return cur.rowcount
+
+
+def count_topic_rules(*, enabled_only: bool = True) -> int:
+    sql = "SELECT COUNT(*) AS n FROM topic_rules WHERE tenant_id=?"
+    if enabled_only:
+        sql += " AND enabled=1"
+    with read_cursor() as cur:
+        cur.execute(sql, (tenant_id(),))
+        return int(cur.fetchone()["n"])
+
+
+def touch_topic_rule(rule_id: int) -> None:
+    with write_tx() as cur:
+        cur.execute("UPDATE topic_rules SET hits = hits + 1 WHERE id=? AND tenant_id=?",
+                    (rule_id, tenant_id()))
+
+
+# =============================================================================
+# DAL — unanswered questions (what the assistant could not answer)
+# =============================================================================
+def insert_unanswered(business_connection_id: str | None, customer_chat_id: int | None,
+                      question: str) -> int:
+    text = (question or "").strip()[:2000]
+    with write_tx() as cur:
+        cur.execute(
+            "SELECT id FROM unanswered_questions WHERE tenant_id=? AND "
+            "customer_chat_id IS ? AND question=? AND status='open' LIMIT 1",
+            (tenant_id(), customer_chat_id, text),
+        )
+        row = cur.fetchone()
+        if row is not None:
+            return int(row["id"])
+        cur.execute(
+            "INSERT INTO unanswered_questions(tenant_id, business_connection_id, "
+            "customer_chat_id, question, status, created_at) VALUES (?,?,?,?,'open',?)",
+            (tenant_id(), business_connection_id, customer_chat_id, text, utils.now_iso()),
+        )
+        return int(cur.lastrowid)
+
+
+def list_unanswered(status: str = "open", limit: int = 20) -> list:
+    with read_cursor() as cur:
+        cur.execute(
+            "SELECT * FROM unanswered_questions WHERE tenant_id=? AND status=? "
+            "ORDER BY id DESC LIMIT ?",
+            (tenant_id(), status, int(limit)),
+        )
+        return cur.fetchall()
+
+
+def get_unanswered(question_id: int):
+    with read_cursor() as cur:
+        cur.execute("SELECT * FROM unanswered_questions WHERE id=? AND tenant_id=?",
+                    (question_id, tenant_id()))
+        return cur.fetchone()
+
+
+def answer_unanswered(question_id: int, answer: str) -> bool:
+    with write_tx() as cur:
+        cur.execute(
+            "UPDATE unanswered_questions SET answer=?, status='answered', answered_at=? "
+            "WHERE id=? AND tenant_id=?",
+            (answer, utils.now_iso(), question_id, tenant_id()),
+        )
+        return cur.rowcount > 0
+
+
+def set_unanswered_status(question_id: int, status: str) -> bool:
+    with write_tx() as cur:
+        cur.execute(
+            "UPDATE unanswered_questions SET status=? WHERE id=? AND tenant_id=?",
+            (status, question_id, tenant_id()),
+        )
+        return cur.rowcount > 0
+
+
+def count_unanswered(status: str = "open") -> int:
+    with read_cursor() as cur:
+        cur.execute("SELECT COUNT(*) AS n FROM unanswered_questions WHERE tenant_id=? AND status=?",
+                    (tenant_id(), status))
+        return int(cur.fetchone()["n"])
+
+
+def clear_unanswered(status: str | None = None) -> int:
+    sql = "DELETE FROM unanswered_questions WHERE tenant_id=?"
+    params: list = [tenant_id()]
+    if status:
+        sql += " AND status=?"
+        params.append(status)
+    with write_tx() as cur:
+        cur.execute(sql, tuple(params))
+        return cur.rowcount
+
+
+# =============================================================================
+# DAL — resources (links / channels the assistant may search and share)
+# =============================================================================
+def insert_resource(kind: str, title: str, url: str = "", notes: str = "",
+                    *, chars: int = 0) -> int:
+    with write_tx() as cur:
+        cur.execute(
+            "INSERT INTO resources(tenant_id, kind, title, url, notes, enabled, chars, "
+            "created_at) VALUES (?,?,?,?,?,1,?,?)",
+            (tenant_id(), kind, title, url, notes, int(chars), utils.now_iso()),
+        )
+        return int(cur.lastrowid)
+
+
+def list_resources(*, enabled_only: bool = False) -> list:
+    sql = "SELECT * FROM resources WHERE tenant_id=?"
+    if enabled_only:
+        sql += " AND enabled=1"
+    sql += " ORDER BY id"
+    with read_cursor() as cur:
+        cur.execute(sql, (tenant_id(),))
+        return cur.fetchall()
+
+
+def get_resource(resource_id: int):
+    with read_cursor() as cur:
+        cur.execute("SELECT * FROM resources WHERE id=? AND tenant_id=?",
+                    (resource_id, tenant_id()))
+        return cur.fetchone()
+
+
+def set_resource_enabled(resource_id: int, enabled: bool) -> bool:
+    with write_tx() as cur:
+        cur.execute("UPDATE resources SET enabled=? WHERE id=? AND tenant_id=?",
+                    (1 if enabled else 0, resource_id, tenant_id()))
+        return cur.rowcount > 0
+
+
+def delete_resource(resource_id: int) -> int:
+    with write_tx() as cur:
+        cur.execute("DELETE FROM resources WHERE id=? AND tenant_id=?", (resource_id, tenant_id()))
+        return cur.rowcount
+
+
+def count_resources() -> int:
+    with read_cursor() as cur:
+        cur.execute("SELECT COUNT(*) AS n FROM resources WHERE tenant_id=? AND enabled=1",
+                    (tenant_id(),))
+        return int(cur.fetchone()["n"])
+
+
+def clear_resources() -> int:
+    with write_tx() as cur:
+        cur.execute("DELETE FROM resources WHERE tenant_id=?", (tenant_id(),))
+        return cur.rowcount
+
+
+# =============================================================================
+# DAL — required channels + membership cache (the subscription gate)
+# =============================================================================
+def add_required_channel(chat_ref: str, *, title: str = "", invite_link: str = "",
+                         kind: str = "channel") -> int:
+    ref = (chat_ref or "").strip()
+    with write_tx() as cur:
+        cur.execute("SELECT id FROM required_channels WHERE tenant_id=? AND chat_ref=?",
+                    (tenant_id(), ref))
+        row = cur.fetchone()
+        if row is not None:
+            cur.execute(
+                "UPDATE required_channels SET title=?, invite_link=?, kind=?, enabled=1 "
+                "WHERE id=?",
+                (title, invite_link, kind, int(row["id"])),
+            )
+            return int(row["id"])
+        cur.execute(
+            "INSERT INTO required_channels(tenant_id, chat_ref, title, invite_link, kind, "
+            "enabled, created_at) VALUES (?,?,?,?,?,1,?)",
+            (tenant_id(), ref, title, invite_link, kind, utils.now_iso()),
+        )
+        return int(cur.lastrowid)
+
+
+def list_required_channels(*, enabled_only: bool = False) -> list:
+    sql = "SELECT * FROM required_channels WHERE tenant_id=?"
+    if enabled_only:
+        sql += " AND enabled=1"
+    sql += " ORDER BY id"
+    with read_cursor() as cur:
+        cur.execute(sql, (tenant_id(),))
+        return cur.fetchall()
+
+
+def get_required_channel(channel_id: int):
+    with read_cursor() as cur:
+        cur.execute("SELECT * FROM required_channels WHERE id=? AND tenant_id=?",
+                    (channel_id, tenant_id()))
+        return cur.fetchone()
+
+
+def set_required_channel_enabled(channel_id: int, enabled: bool) -> bool:
+    with write_tx() as cur:
+        cur.execute("UPDATE required_channels SET enabled=? WHERE id=? AND tenant_id=?",
+                    (1 if enabled else 0, channel_id, tenant_id()))
+        return cur.rowcount > 0
+
+
+def delete_required_channel(channel_id: int) -> int:
+    with write_tx() as cur:
+        cur.execute("DELETE FROM required_channels WHERE id=? AND tenant_id=?",
+                    (channel_id, tenant_id()))
+        return cur.rowcount
+
+
+def count_required_channels() -> int:
+    with read_cursor() as cur:
+        cur.execute("SELECT COUNT(*) AS n FROM required_channels WHERE tenant_id=? AND enabled=1",
+                    (tenant_id(),))
+        return int(cur.fetchone()["n"])
+
+
+def set_gate_check(customer_chat_id: int, all_ok: bool) -> None:
+    with write_tx() as cur:
+        cur.execute(
+            "INSERT INTO gate_checks(customer_chat_id, all_ok, checked_at) VALUES (?,?,?) "
+            "ON CONFLICT(customer_chat_id) DO UPDATE SET all_ok=excluded.all_ok, "
+            "checked_at=excluded.checked_at",
+            (int(customer_chat_id), 1 if all_ok else 0, utils.now_iso()),
+        )
+
+
+def get_gate_check(customer_chat_id: int):
+    with read_cursor() as cur:
+        cur.execute("SELECT * FROM gate_checks WHERE customer_chat_id=?", (int(customer_chat_id),))
+        return cur.fetchone()
+
+
+def clear_gate_checks() -> None:
+    with write_tx() as cur:
+        cur.execute("DELETE FROM gate_checks")
+
+
+# =============================================================================
+# DAL — paid messages (Telegram Stars)
+# =============================================================================
+def create_paid_message(customer_chat_id: int, user_id: int | None, payload: str, stars: int,
+                        message_text: str, *, status: str = "pending") -> int:
+    with write_tx() as cur:
+        cur.execute(
+            "INSERT INTO paid_messages(tenant_id, customer_chat_id, user_id, payload, stars, "
+            "message_text, status, created_at) VALUES (?,?,?,?,?,?,?,?)",
+            (tenant_id(), int(customer_chat_id), user_id, payload, int(stars), message_text,
+             status, utils.now_iso()),
+        )
+        return int(cur.lastrowid)
+
+
+def get_paid_message_by_payload(payload: str):
+    with read_cursor() as cur:
+        cur.execute("SELECT * FROM paid_messages WHERE payload=? AND tenant_id=? "
+                    "ORDER BY id DESC LIMIT 1", (payload, tenant_id()))
+        return cur.fetchone()
+
+
+def mark_paid_message_paid(payload: str, charge_id: str = "") -> bool:
+    with write_tx() as cur:
+        cur.execute(
+            "UPDATE paid_messages SET status='paid', charge_id=?, paid_at=? "
+            "WHERE payload=? AND tenant_id=? AND status='pending'",
+            (charge_id, utils.now_iso(), payload, tenant_id()),
+        )
+        return cur.rowcount > 0
+
+
+def mark_paid_message_delivered(message_id: int) -> None:
+    with write_tx() as cur:
+        cur.execute("UPDATE paid_messages SET delivered=1 WHERE id=? AND tenant_id=?",
+                    (int(message_id), tenant_id()))
+
+
+def set_paid_message_status(message_id: int, status: str) -> bool:
+    with write_tx() as cur:
+        cur.execute("UPDATE paid_messages SET status=? WHERE id=? AND tenant_id=?",
+                    (status, int(message_id), tenant_id()))
+        return cur.rowcount > 0
+
+
+def count_paid_messages(*, status: str | None = None, free: bool | None = None) -> int:
+    sql = "SELECT COUNT(*) AS n FROM paid_messages WHERE tenant_id=?"
+    params: list = [tenant_id()]
+    if status:
+        sql += " AND status=?"
+        params.append(status)
+    if free is True:
+        sql += " AND stars=0"
+    elif free is False:
+        sql += " AND stars>0"
+    with read_cursor() as cur:
+        cur.execute(sql, tuple(params))
+        return int(cur.fetchone()["n"])
+
+
+def count_free_messages_used(customer_chat_id: int) -> int:
+    with read_cursor() as cur:
+        cur.execute(
+            "SELECT COUNT(*) AS n FROM paid_messages WHERE tenant_id=? AND "
+            "customer_chat_id=? AND stars=0 AND status IN ('free','paid')",
+            (tenant_id(), int(customer_chat_id)),
+        )
+        return int(cur.fetchone()["n"])
+
+
+def sum_stars_earned() -> int:
+    with read_cursor() as cur:
+        cur.execute("SELECT COALESCE(SUM(stars), 0) AS total FROM paid_messages "
+                    "WHERE tenant_id=? AND status='paid' AND stars>0", (tenant_id(),))
+        return int(cur.fetchone()["total"])
+
+
+def list_paid_messages(limit: int = 20) -> list:
+    with read_cursor() as cur:
+        cur.execute("SELECT * FROM paid_messages WHERE tenant_id=? ORDER BY id DESC LIMIT ?",
+                    (tenant_id(), int(limit)))
+        return cur.fetchall()

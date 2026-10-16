@@ -12,6 +12,39 @@ import utils
 log = logging.getLogger("smartel.business")
 
 
+def _direct_connection_id() -> str:
+    import telegram_api
+    return telegram_api.DIRECT_CONNECTION_ID
+
+
+def is_direct(business_connection_id: str | None) -> bool:
+    """True for the synthetic connection that represents the bot's own DMs."""
+    return business_connection_id == _direct_connection_id()
+
+
+def ensure_direct_connection() -> str:
+    """Create/refresh the pseudo-connection used to store direct-message chats.
+
+    Direct chats reuse the whole business pipeline (customers, messages, memory,
+    approvals, pauses) by living under one reserved connection id. The row is
+    stored with ``can_reply=1`` and the owner as its user, so every existing
+    "can I reply?" check passes without special cases.
+    """
+    import security
+    bcid = _direct_connection_id()
+    owner = security.owner_id() or 0
+    existing = database.get_business_connection(bcid)
+    if existing is None or int(existing["business_user_id"] or 0) != int(owner):
+        database.upsert_business_connection(bcid, owner, True, True)
+    return bcid
+
+
+def real_connections() -> list:
+    """Connections that are NOT the synthetic direct-message one."""
+    return [c for c in database.list_business_connections()
+            if c["business_connection_id"] != _direct_connection_id()]
+
+
 # =============================================================================
 # can_reply resolution (rights.can_reply for Bot API 9.0+, else can_reply)
 # =============================================================================
@@ -102,7 +135,15 @@ def upsert_customer_from_message(business_connection_id: str, message) -> None:
 
 
 def find_bcid_for_chat(customer_chat_id: int) -> str | None:
-    return database.find_bcid_for_chat(customer_chat_id)
+    found = database.find_bcid_for_chat(customer_chat_id)
+    if found is not None:
+        return found
+    # A direct-message chat may exist before any business connection does; the
+    # synthetic row is only used when the customer is actually known there.
+    bcid = _direct_connection_id()
+    if database.get_customer(bcid, customer_chat_id) is not None:
+        return bcid
+    return None
 
 
 def customer_display_name(business_connection_id: str, customer_chat_id: int) -> str:
@@ -151,11 +192,12 @@ def is_chat_paused(business_connection_id: str, customer_chat_id: int) -> bool:
 # Status
 # =============================================================================
 def get_status() -> dict:
-    connections = database.list_business_connections()
+    connections = real_connections()
     return {
         "auto_reply_enabled": database.get_bool("auto_reply_enabled"),
         "approval_mode_enabled": database.get_bool("approval_mode_enabled"),
         "monitoring_mode": database.get_bool("monitoring_mode"),
+        "direct_reply_enabled": database.get_bool("direct_reply_enabled"),
         "model": database.get_str("openai_model"),
         "connections": connections,
         "paused_count": len(database.list_active_pauses()),

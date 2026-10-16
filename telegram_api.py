@@ -31,6 +31,23 @@ _API_BASE: str | None = None
 _FILE_BASE: str | None = None
 _TIMEOUT = (5, 30)  # (connect, read)
 
+# Synthetic "business connection" that represents the bot's own private chats.
+# Direct messages need no Telegram Business rights, so every call that would
+# carry this id must be sent WITHOUT business_connection_id (Telegram rejects an
+# unknown id with "business connection not found").
+DIRECT_CONNECTION_ID = "direct"
+
+
+def api_connection_id(business_connection_id: str | None) -> str | None:
+    """The ``business_connection_id`` to put on the wire (None for direct chats)."""
+    if business_connection_id in (None, "", DIRECT_CONNECTION_ID):
+        return None
+    return business_connection_id
+
+
+def is_direct_connection(business_connection_id: str | None) -> bool:
+    return business_connection_id == DIRECT_CONNECTION_ID
+
 
 class TelegramAPIError(Exception):
     def __init__(self, description: str, error_code: int | None = None):
@@ -102,6 +119,7 @@ def _post(method: str, data: dict, *, retry_429: bool = True) -> dict:
 # =============================================================================
 def send_message(chat_id, text, business_connection_id=None, reply_to_message_id=None,
                  parse_mode="HTML", reply_markup=None) -> dict:
+    business_connection_id = api_connection_id(business_connection_id)
     return _post("sendMessage", {
         "chat_id": chat_id,
         "text": text,
@@ -113,6 +131,7 @@ def send_message(chat_id, text, business_connection_id=None, reply_to_message_id
 
 
 def send_chat_action(chat_id, action, business_connection_id=None) -> dict:
+    business_connection_id = api_connection_id(business_connection_id)
     return _post("sendChatAction", {
         "chat_id": chat_id,
         "action": action,
@@ -141,6 +160,24 @@ def get_business_connection(business_connection_id) -> dict | None:
 
 def get_file(file_id) -> dict:
     return _post("getFile", {"file_id": file_id})
+
+
+def get_chat_member(chat_id, user_id) -> dict | None:
+    """Membership lookup for the subscription gate (None when unknown)."""
+    try:
+        return _post("getChatMember", {"chat_id": chat_id, "user_id": user_id})
+    except TelegramAPIError as e:
+        log.info("getChatMember failed for %s: %s", chat_id, e.description)
+        return None
+
+
+def get_chat(chat_id) -> dict | None:
+    """Chat metadata (used to turn an @username into a title/kind)."""
+    try:
+        return _post("getChat", {"chat_id": chat_id})
+    except TelegramAPIError as e:
+        log.info("getChat failed for %s: %s", chat_id, e.description)
+        return None
 
 
 def download_file(file_path, dest_path) -> None:
@@ -196,6 +233,48 @@ def download_file_bytes(file_id, *, max_bytes: int = MAX_DOWNLOAD_BYTES) -> byte
             if attempt == 0:
                 continue
     raise TelegramAPIError(f"could not download the file: {type(last_error).__name__}")
+
+
+# =============================================================================
+# Telegram Stars invoices (the paid-message gate)
+# =============================================================================
+def send_star_invoice(chat_id, *, title: str, description: str, payload: str, stars: int,
+                      label: str = "", reply_markup=None) -> dict | None:
+    """Send a Telegram Stars invoice (currency ``XTR``: 1 star = 1 unit).
+
+    Uses the raw API because Stars invoices must not carry a provider token, and
+    older TeleBot wrappers insist on one. Returns the sent message or None.
+    """
+    data = {
+        "chat_id": chat_id,
+        "title": title[:32],
+        "description": description[:255],
+        "payload": payload,
+        "currency": "XTR",
+        "prices": json.dumps([{"label": (label or title)[:32], "amount": int(stars)}]),
+        "start_parameter": "paid-message",
+    }
+    if reply_markup is not None:
+        data["reply_markup"] = reply_markup.to_json() if hasattr(reply_markup, "to_json") \
+            else reply_markup
+    try:
+        return _post("sendInvoice", data)
+    except TelegramAPIError as e:
+        log.warning("sendInvoice failed: %s", e.description)
+        return None
+
+
+def answer_pre_checkout_query(query_id: str, ok: bool, error_message: str | None = None) -> bool:
+    """Approve/decline a Stars payment before it is charged."""
+    data = {"pre_checkout_query_id": query_id, "ok": ok}
+    if error_message and not ok:
+        data["error_message"] = error_message[:200]
+    try:
+        _post("answerPreCheckoutQuery", data)
+        return True
+    except TelegramAPIError as e:
+        log.warning("answerPreCheckoutQuery failed: %s", e.description)
+        return False
 
 
 # =============================================================================
@@ -259,6 +338,7 @@ def _send_one(bot, chat_id, text, business_connection_id, reply_to_message_id,
             kwargs = {}
             if parse_mode:
                 kwargs["parse_mode"] = parse_mode
+            business_connection_id = api_connection_id(business_connection_id)
             if business_connection_id is not None:
                 kwargs["business_connection_id"] = business_connection_id
             if reply_to_message_id is not None:
@@ -278,7 +358,8 @@ def _send_one(bot, chat_id, text, business_connection_id, reply_to_message_id,
             break
     log.warning("TeleBot send failed (%s); falling back to raw HTTP.",
                 type(last_error).__name__)
-    return send_message(chat_id, text, business_connection_id=business_connection_id,
+    return send_message(chat_id, text,
+                        business_connection_id=api_connection_id(business_connection_id),
                         reply_to_message_id=reply_to_message_id, parse_mode=parse_mode,
                         reply_markup=reply_markup)
 
@@ -329,6 +410,7 @@ def chat_action(bot, chat_id, action, business_connection_id=None) -> None:
     """Best-effort typing indicator; never raises."""
     try:
         kwargs = {}
+        business_connection_id = api_connection_id(business_connection_id)
         if business_connection_id is not None:
             kwargs["business_connection_id"] = business_connection_id
         bot.send_chat_action(chat_id, action, **kwargs)
