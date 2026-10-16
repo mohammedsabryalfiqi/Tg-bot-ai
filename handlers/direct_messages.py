@@ -38,15 +38,17 @@ import security
 import keyboards
 import telegram_api
 import utils
-from handlers import approvals
+from handlers import approvals, gates as gate_handler
 from services import (
     ai_service,
     batching,
     business_service,
+    gate_service,
     memory_service,
     prompt_service,
     providers,
     rate_limit_service,
+    rules_service,
 )
 from services.ai_service import AIServiceError
 
@@ -141,6 +143,15 @@ def _process_scoped(message) -> None:
     if database.message_exists(bcid, chat_id, message_id, "in"):
         log.info("duplicate direct message %s ignored", message_id)
         return
+
+    # Entry gates run *before* the message is stored or answered: until the
+    # person has joined the channels (or paid), the message never reaches the
+    # account owner. Business chats never come through here.
+    was_gated = _entry_gates(bcid, chat_id, sender_id, message, text)
+    if was_gated is False:                      # held at a gate
+        return
+    gated = was_gated or None
+
     database.insert_message(bcid, chat_id, message_id, "in", "user", text)
 
     if not _any_automation_on():
@@ -172,24 +183,133 @@ def _process_scoped(message) -> None:
     if not combined_text:
         return
     first_message_id = batch[0][0] if batch else message_id
+    _answer(conn, message, chat_id, first_message_id, combined_text, gated=gated)
 
+
+def _answer(conn, message, chat_id: int, customer_message_id, customer_text: str,
+            *, gated: dict | None = None) -> None:
+    """Generate (or draft) the reply for one customer message."""
+    bcid = conn["business_connection_id"]
     with telegram_api.typing_keepalive(
         handlers.bot, chat_id,
         business_connection_id=bcid,
         enabled=database.get_bool("typing_indicator"),
     ):
-        reply_text = _generate_reply(conn, chat_id, combined_text)
+        reply_text = _generate_reply(conn, chat_id, customer_text)
     if not reply_text:
         return
-    reply_text = prompt_service.apply_signature(reply_text)
 
-    sensitive = prompt_service.is_sensitive(combined_text)
+    # "I don't know": answer nothing but ask the team, and file the question so
+    # the owner can answer it once and have it learned (see handlers/unanswered).
+    if rules_service.is_no_answer(reply_text):
+        _handle_unknown(bcid, chat_id, customer_text)
+        return
+
+    reply_text = prompt_service.apply_signature(reply_text)
+    sensitive = prompt_service.is_sensitive(customer_text)
     force_approval = sensitive and database.get_bool("sensitive_requires_approval")
 
     if database.get_bool("approval_mode_enabled") or force_approval:
-        approvals.create_request(conn, message, combined_text, reply_text, sensitive=sensitive)
+        approvals.create_request(conn, message, customer_text, reply_text, sensitive=sensitive)
     else:
-        _deliver_auto(conn, chat_id, first_message_id, combined_text, reply_text)
+        _deliver_auto(conn, chat_id, customer_message_id, customer_text, reply_text)
+
+    if gated:
+        _copy_gated_to_owner(bcid, chat_id, customer_text, reply_text, gated)
+
+
+# =============================================================================
+# Entry gates (private messages only)
+# =============================================================================
+def _entry_gates(bcid: str, chat_id: int, user_id, message, text: str):
+    """Run both gates before the message is answered.
+
+    Returns ``False`` when the message was held back (the person must join the
+    channels or pay first), ``None`` when no gate applies, otherwise a dict
+    describing the gate that let the message through (used for the owner copy).
+    """
+    if not user_id:
+        return None
+
+    subscription_fresh = False
+    if gate_service.subscription_enabled():
+        verified = gate_service.was_verified_before(user_id)
+        missing = gate_service.missing_channels(user_id)
+        if missing:
+            _ask_to_subscribe(chat_id, missing)
+            return False
+        # Just joined: this is the first message that got through the gate, so
+        # it is the one the owner gets a copy of.
+        subscription_fresh = not verified
+
+    if gate_service.payment_required(user_id):
+        if not gate_handler.request_payment(chat_id, user_id, text):
+            # The invoice could not be created (no price? Telegram refused):
+            # never lock a real person out — answer normally.
+            log.warning("could not ask chat=%s for the star payment",
+                        utils.mask_id(chat_id))
+            return None
+        return False
+
+    if gate_service.payments_enabled():
+        left = gate_service.free_left(user_id)
+        if left > 0:
+            gate_service.park_message(user_id, chat_id, text, free=True)
+            return {"kind": "free", "stars": 0, "left": left - 1}
+        return None
+
+    if subscription_fresh:
+        return {"kind": "subscription", "stars": 0}
+    return None
+
+
+def _ask_to_subscribe(chat_id: int, missing: list) -> None:
+    names = "\n".join(f"• {utils.escape(row['title'] or row['chat_ref'])}" for row in missing)
+    markup = keyboards.subscription_gate()
+    try:
+        handlers.bot.send_message(chat_id, i18n.t("gate.user.sub", list=names),
+                                  parse_mode="HTML", reply_markup=markup)
+    except Exception:
+        log.warning("could not send the subscription prompt chat=%s",
+                    utils.mask_id(chat_id), exc_info=True)
+
+
+def _handle_unknown(bcid: str, chat_id: int, customer_text: str) -> None:
+    """The assistant had no answer: say so politely and file the question."""
+    if not database.get_bool("unanswered_enabled"):
+        return
+    try:
+        telegram_api.send_reply(handlers.bot, chat_id,
+                               i18n.t("unans.auto_reply"),
+                               business_connection_id=bcid)
+        database.insert_message(bcid, chat_id, None, "out", "assistant",
+                                i18n.t("unans.auto_reply"))
+    except Exception:
+        log.warning("could not send the no-answer notice chat=%s",
+                    utils.mask_id(chat_id), exc_info=True)
+    question_id = rules_service.record_unanswered(bcid, chat_id, customer_text)
+    if question_id:
+        from handlers import unanswered as unanswered_handler
+        unanswered_handler.notify_owner(question_id, bcid, chat_id, customer_text)
+
+
+def _copy_gated_to_owner(bcid: str, chat_id: int, customer_text: str, reply_text: str,
+                         gated: dict) -> None:
+    """Copy a gated conversation to the owner (switchable in /settings)."""
+    if not database.get_bool("gate_copy_to_owner"):
+        return
+    name = business_service.customer_display_name(bcid, chat_id)
+    markup = None
+    if gated.get("paid_message_id"):
+        markup = keyboards.paid_message_actions(gated["paid_message_id"])
+    handlers.notify_owner(i18n.t(
+        "gate.owner.copy",
+        stars=gated.get("stars", 0),
+        name=utils.escape(name),
+        chat_id=chat_id,
+        text=utils.escape(customer_text[:1200]),
+        reply=utils.escape(reply_text[:1200]),
+    ), reply_markup=markup)
 
 
 def _generate_reply(conn, chat_id: int, customer_text: str) -> str | None:
@@ -258,6 +378,72 @@ def _deliver_auto(conn, chat_id: int, customer_message_id, customer_text: str,
             text=utils.escape(customer_text[:200]),
             reply=utils.escape(reply_text[:500]),
         ))
+
+
+def process_paid_message(row: dict) -> bool:
+    """Deliver a message whose Telegram Stars payment just landed.
+
+    Same pipeline as any other private message (history, memory, drafting,
+    signature), minus batching and rate limiting: the person already paid, so
+    the message is answered now.
+    """
+    with database.tenant_scope(0):
+        try:
+            return _process_paid_scoped(row)
+        except Exception:
+            log.exception("paid-message delivery crashed (swallowed)")
+            return False
+
+
+def _process_paid_scoped(row: dict) -> bool:
+    chat_id = int(row["customer_chat_id"] or 0)
+    text = (row["message_text"] or "").strip()
+    if not chat_id or not text:
+        return False
+    bcid = business_service.ensure_direct_connection()
+    conn = business_service.get_connection(bcid)
+    if conn is None or not conn["is_enabled"]:
+        return False
+    if not ai_service.is_ready():
+        handlers.notify_owner(i18n.t("gate.pay.failed"))
+        return False
+
+    try:
+        handlers.bot.send_message(chat_id, i18n.t("gate.pay.done"))
+    except Exception:
+        log.debug("could not send the payment confirmation", exc_info=True)
+
+    database.insert_message(bcid, chat_id, None, "in", "user", text)
+    gated = {"kind": "paid", "stars": int(row["stars"] or 0),
+             "paid_message_id": int(row["id"])}
+    with telegram_api.typing_keepalive(
+        handlers.bot, chat_id,
+        business_connection_id=bcid,
+        enabled=database.get_bool("typing_indicator"),
+    ):
+        reply_text = _generate_reply(conn, chat_id, text)
+    if not reply_text:
+        return False
+    if rules_service.is_no_answer(reply_text):
+        _handle_unknown(bcid, chat_id, text)
+        return True
+    reply_text = prompt_service.apply_signature(reply_text)
+    if database.get_bool("approval_mode_enabled"):
+        message = _synthetic_message(chat_id, text)
+        approvals.create_request(conn, message, text, reply_text, sensitive=False)
+    else:
+        _deliver_auto(conn, chat_id, None, text, reply_text)
+    _copy_gated_to_owner(bcid, chat_id, text, reply_text, gated)
+    return True
+
+
+def _synthetic_message(chat_id: int, text: str):
+    """A minimal Message so draft-mode approvals still get a chat/message id."""
+    from telebot import types
+
+    chat = types.Chat(chat_id, "private")
+    user = types.User(chat_id, False, "customer")
+    return types.Message(0, user, 0, chat, "text", {"text": text})
 
 
 def _notify_incoming(bcid: str, chat_id: int, text: str) -> None:

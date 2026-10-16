@@ -37,6 +37,8 @@ _GROUP_KEYS = {
     "ai": "set.group.ai",
     "ground": "set.group.ground",
     "limits": "set.group.limits",
+    "learning": "set.group.learning",
+    "gate": "set.group.gate",
 }
 
 SETTINGS = [
@@ -105,6 +107,26 @@ SETTINGS = [
      "min": 1, "max": 100000},
     {"key": "owner_takeover_pause_minutes", "group": "limits", "type": "int",
      "min": 1, "max": 100000},
+
+    # --- learning (rules, resources, unanswered) ------------------------------
+    {"key": "rules_enabled", "group": "learning", "type": "bool",
+     "hint_key": "set.opt.rules_enabled.hint"},
+    {"key": "resources_enabled", "group": "learning", "type": "bool",
+     "hint_key": "set.opt.resources_enabled.hint"},
+    {"key": "unanswered_enabled", "group": "learning", "type": "bool",
+     "hint_key": "set.opt.unanswered_enabled.hint"},
+
+    # --- entry gates (private messages only) ----------------------------------
+    {"key": "require_subscription_enabled", "group": "gate", "type": "bool",
+     "hint_key": "set.opt.require_subscription_enabled.hint"},
+    {"key": "paid_messages_enabled", "group": "gate", "type": "bool",
+     "hint_key": "set.opt.paid_messages_enabled.hint"},
+    {"key": "paid_message_stars", "group": "gate", "type": "int", "min": 0,
+     "max": 100000, "hint_key": "set.opt.paid_message_stars.hint"},
+    {"key": "paid_message_free_count", "group": "gate", "type": "int", "min": 0,
+     "max": 100000},
+    {"key": "gate_copy_to_owner", "group": "gate", "type": "bool",
+     "hint_key": "set.opt.gate_copy_to_owner.hint"},
 ]
 _BY_KEY = {s["key"]: s for s in SETTINGS}
 

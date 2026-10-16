@@ -1161,8 +1161,154 @@ STRINGS: dict[str, str] = {
     "ai.what.embeddings": "تمثيلات {label}",
     "ai.what.anthropic_test": "اختبار Anthropic",
     "ai.what.test": "اختبار {label}",
-
-    # ==== append-below ===='''
+    "kbd.rule.add": "✍️ ابعت التعليمات",
+    "kbd.rule.list": "📃 قائمة القواعد",
+    "kbd.rule.ask_questions": "❓ أسئلة بدون إجابة",
+    "kbd.rule.approve": "✅ اعتماد وتطبيق",
+    "kbd.rule.edit": "✏️ عدّل النص وابعته تاني",
+    "kbd.rule.discard": "🗑 إلغاء",
+    "kbd.res.add": "🔗 إضافة مصدر",
+    "kbd.res.list": "📃 قائمة المصادر",
+    "kbd.unans.answer": "✍️ الإجابة",
+    "kbd.unans.ignore": "🚫 تجاهل",
+    "kbd.gate.subscription": "🔒 الاشتراك الإجباري (القنوات)",
+    "kbd.gate.stars": "⭐ الرسائل المدفوعة (نجوم)",
+    "kbd.gate.list": "📃 المطلوب حاليًا",
+    "kbd.gate.add_channel": "➕ إضافة قناة/جروب",
+    "kbd.gate.refund": "↩️ استرجاع دفع النجوم ده",
+    "kbd.paid.buy": "⭐ ادفع {stars} وابعت رسالتي",
+    # =========================================================================
+    # handlers/gates.py — بوابات الدخول (/gate)
+    # =========================================================================
+    "gate.title": "🚪 <b>بوابات الدخول</b>",
+    "gate.body": (
+        "البوابتين مقفولين افتراضيًا وبيتطبّقوا على <b>الرسائل الخاصة</b> اللي "
+        "الناس بتبعتها للبوت. محادثات Telegram Business مش بتتأثر خالص، فأي حاجة "
+        "شغالة دلوقتي هتفضل شغالة."
+    ),
+    "gate.hint": "شغّلهم من هنا وقت ما تحب.",
+    "gate.sub.title": "🔒 <b>الاشتراك الإجباري</b>",
+    "gate.sub.body": (
+        "لازم كل واحد يشترك في القنوات/الجروبات اللي تحت قبل ما البوت يرد. "
+        "الناس بتاخد أزرار اشتراك، وبعدها زر ✅ للتحقق."
+    ),
+    "gate.sub.empty": "لسه مفيش قنوات.",
+    "gate.sub.add_hint": "الحالة الحالية: <b>{state}</b>",
+    "gate.sub.ask": (
+        "ابعت القناة/الجروب بالشكل <code>@username</code> أو بمعرّفها الرقمي، أو "
+        "<code>@username | العنوان | رابط الدعوة</code>. والبوت لازم يكون مشرف "
+        "هناك علشان يقدر يتحقق من الاشتراك."
+    ),
+    "gate.sub.saved": "✅ تمت إضافة #{id} <b>{title}</b> (<code>{ref}</code>).",
+    "gate.sub.on_alert": "الاشتراك الإجباري اتفعّل",
+    "gate.sub.off_alert": "الاشتراك الإجباري اتقفل",
+    "gate.sub.row_on": "مفعّلة ✅",
+    "gate.sub.row_off": "متوقفة ⏸",
+    "gate.sub.channel": "قناة",
+    "gate.sub.group": "جروب",
+    "gate.stars.title": "⭐ <b>الرسائل المدفوعة (نجوم تيليجرام)</b>",
+    "gate.stars.body": (
+        "كل رسالة بتكلف عدد النجوم اللي تحدده. البوت يرد على أول رسائل مجانية، "
+        "وبعدها يطلب النجوم ويسلّم الرسالة أول ما تيليجرام يأكّد الدفع."
+    ),
+    "gate.stars.enabled": "الرسائل المدفوعة: <b>{state}</b>",
+    "gate.stars.price": "سعر الرسالة: <b>{stars}</b> نجمة",
+    "gate.stars.free": "رسائل مجانية قبل الدفع: <b>{count}</b>",
+    "gate.stars.earned": "رسائل مدفوعة: <b>{count}</b> · النجوم المكتسبة: <b>{stars}</b>",
+    "gate.stars.need_price": "⚠️ اكتب سعر أكبر من صفر — ولحد ساعتها البوابة مفتوحة.",
+    "gate.stars.hint": (
+        "اضغط على أي قيمة لتغييرها، أو افتح /settings ← التعلّم والمصادر لنفس "
+        "المفاتيح."
+    ),
+    "gate.stars.on_alert": "الرسائل المدفوعة اتفعّلت",
+    "gate.stars.off_alert": "الرسائل المدفوعة اتقفلت",
+    "gate.price.ask": "⭐ ابعت سعر الرسالة بالنجوم كرقم (مثال: 50).",
+    "gate.price.bad": "ابعت السعر أرقام بس.",
+    "gate.price.range": "ابعت رقم بين 1 و {max}.",
+    "gate.price.saved": "✅ السعر بقى <b>{stars}</b> نجمة، والرسائل المدفوعة اتفعّلت.",
+    "gate.free.ask": "ابعت عدد الرسائل المجانية لكل شخص (0 = مفيش).",
+    "gate.free.bad": "ابعت الرقم أرقام بس.",
+    "gate.free.saved": "✅ الرسائل المجانية قبل الدفع: <b>{count}</b>.",
+    "gate.cb.type": "ابعت القيمة في رسالتك الجاية.",
+    "gate.list.title": "📃 <b>المطلوب حاليًا</b>",
+    "gate.list.payments": "<b>آخر المدفوعات</b>",
+    "gate.list.payment_row": "#{id} المحادثة <code>{chat_id}</code> — {stars}⭐ ({status})",
+    "gate.refunded": "اتسجّل كمرتجع.",
+    "gate.refund_missing": "الدفعة مش موجودة.",
+    "gate.status.subscription": "الاشتراك الإجباري: <b>{state}</b> ({count} محادثة)",
+    "gate.status.payments": "الرسائل المدفوعة: <b>{state}</b>",
+    "gate.status.price": "السعر: <b>{stars}</b> نجمة",
+    "gate.status.free": "رسائل مجانية قبل الدفع: <b>{count}</b>",
+    "gate.status.earned": "المدفوع: <b>{count}</b> · النجوم: <b>{stars}</b>",
+    # --- اللي بيشوفه المستخدم ---
+    "gate.user.sub": (
+        "🔒 قبل ما أقدر أرد عليك، لازم تشترك في القنوات/الجروبات دي:\n\n{list}\n\n"
+        "بعد ما تشترك اضغط ✅ تحقّق."
+    ),
+    "gate.user.sub_ok": "✅ تمام، اشتراكك متأكد. ابعت رسالتك تاني 👇",
+    "gate.user.still_missing": "لسه مشتركش في:\n{list}",
+    "gate.user.pay": (
+        "⭐ الرسالة دي بـ {stars} نجمة.\n"
+        "اضغط الزرار تحت لدفع {stars} نجمة، وبعد الدفع هبعت رسالتك في الحال."
+    ),
+    "gate.user.free": "🎁 فاضل لك {left} رسالة مجانية.",
+    "gate.pay.expired": "الفاتورة دي انتهت — ابعت رسالتك تاني.",
+    "gate.pay.done": "✅ الدفع تم! بقرا رسالتك دلوقتي…",
+    "gate.pay.failed": "⚠️ الدفع مكملش. جرّب تاني.",
+    "gate.owner.copy": (
+        "⭐ <b>رسالة مدفوعة ({stars} نجمة)</b>\n"
+        "من: <b>{name}</b> (المحادثة <code>{chat_id}</code>)\n\n"
+        "<b>الرسالة:</b>\n<i>{text}</i>\n\n"
+        "<b>الرد:</b>\n{reply}"
+    ),
+    "kbd.gate.stars_toggle": "⭐ تشغيل/إيقاف الرسائل المدفوعة",
+    "kbd.gate.price": "💲 تحديد السعر (نجوم)",
+    "kbd.gate.free": "🎁 رسائل مجانية قبل الدفع",
+    "main.cmd.rules": "التعليمات وقواعد الرد",
+    "main.cmd.unanswered": "أسئلة البوت ما عرفش يرد عليها",
+    "main.cmd.resources": "المصادر اللي البوت يبحث فيها",
+    "main.cmd.gate": "بوابات الدخول (اشتراك / نجوم)",
+    "set.group.learning": "التعلّم (القواعد والمصادر)",
+    "set.group.gate": "بوابات الدخول (الرسائل الخاصة)",
+    "set.opt.rules_enabled": "اتّبع قواعد الرد اللي اعتمدتها",
+    "set.opt.rules_enabled.hint": (
+        "تتطبّق القواعد اللي بتعتمدها من /rules على كل رد."
+    ),
+    "set.opt.resources_enabled": "البوت يبحث في المصادر",
+    "set.opt.resources_enabled.hint": (
+        "يستخدم المواقع والقنوات/الجروبات اللي ضفتها من /resources وقت ما تساعد في الرد."
+    ),
+    "set.opt.unanswered_enabled": "يسألك عن أي سؤال ما عرفش يرد عليه",
+    "set.opt.unanswered_enabled.hint": (
+        "البوت يقول إنه هيسأل الفريق، وبعدين يبعتلك السؤال من /unanswered، "
+        "وإجابتك بتتحوّل لرد سريع بيتعلمه."
+    ),
+    "set.opt.require_subscription_enabled": "إجبار الاشتراك في قنواتي",
+    "set.opt.require_subscription_enabled.hint": (
+        "لازم الناس تشترك قبل ما البوت يرد، والقايمة بتتظبط من /gate. "
+        "بيتطبّق على الرسائل الخاصة بس."
+    ),
+    "set.opt.paid_messages_enabled": "تحصيل نجوم مقابل الرسائل",
+    "set.opt.paid_messages_enabled.hint": (
+        "كل رسالة بتكلف السعر اللي تحت. خلّي السعر 0 علشان تسيب البوابة مفتوحة. "
+        "بيتطبّق على الرسائل الخاصة بس."
+    ),
+    "set.opt.paid_message_stars": "سعر الرسالة (نجوم)",
+    "set.opt.paid_message_stars.hint": (
+        "عدد نجوم تيليجرام اللي بيدفعها الشخص قبل ما رسالته توصلك. مفيش أي تحصيل وهو 0."
+    ),
+    "set.opt.paid_message_free_count": "رسائل مجانية قبل الدفع",
+    "set.opt.gate_copy_to_owner": "ابعتلي نسخة من الرسائل المحجوبة",
+    "set.opt.gate_copy_to_owner.hint": (
+        "بعد ما الرسالة المحجوبة توصل، البوت يبعتلك الرسالة والرد اللي بعته."
+    ),
+    "kbd.gate.verify": "✅ تأكيد اشتراكي",
+    "gate.user.still_missing_alert": "لسه مشتركتش",
+    "gate.invoice.title": "{name}: رسالة مدفوعة",
+    "gate.invoice.default_title": "رسالة مدفوعة",
+    "gate.invoice.desc": "رسالتك هتوصل لـ {name} أول ما تيليجرام يأكّد الدفع ({stars} نجمة).",
+    "gate.invoice.label": "رسالة",
+    # ==== append-below ====    # ==== append-below ===='''
     # =========================================================================
     # services/providers.py — registry texts (ar)
     # =========================================================================

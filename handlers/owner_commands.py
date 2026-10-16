@@ -521,6 +521,15 @@ def on_confirm_callback(call) -> None:
         result = i18n.t("own.confirm.mem_cleared", count=n)
     elif token == "reset":
         result = _do_reset_transient()
+    elif token == "rulesclear":
+        removed = database.clear_topic_rules()
+        result = i18n.t("rule.clear.done", count=removed)
+    elif token == "resclear":
+        removed = database.clear_resources()
+        result = i18n.t("res.clear.done", count=removed)
+    elif token == "unansclear":
+        removed = database.clear_unanswered("open")
+        result = i18n.t("unans.clear.done", count=removed)
     else:
         result = i18n.t("own.confirm.done")
 

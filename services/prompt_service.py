@@ -12,7 +12,7 @@ import logging
 
 import database
 import utils
-from services import faq_service, kb_service, memory_service
+from services import faq_service, kb_service, memory_service, resource_service, rules_service
 
 log = logging.getLogger("smartel.prompt")
 
@@ -199,6 +199,32 @@ def build_system_prompt(faq_matches: list | None = None, kb_chunks: list | None 
     kb_block = kb_service.build_context_block(kb_chunks or [])
     if kb_block:
         parts.append(kb_block)
+
+    # Owner-written topic rules, shareable resources and learned answers. Each
+    # helper returns "" when its switch is off, so disabling them in /settings
+    # removes them from the prompt completely.
+    rules_block = rules_service.prompt_block()
+    if rules_block:
+        parts.append(rules_block)
+
+    resources_block = resource_service.prompt_block()
+    if resources_block:
+        parts.append(resources_block)
+
+    learned_block = rules_service.answers_block()
+    if learned_block:
+        parts.append(learned_block)
+
+    # The escape hatch: when the assistant truly has nothing to say, it answers
+    # with this exact marker and the pipeline files the question for the owner.
+    if database.get_bool("unanswered_enabled"):
+        parts.append(
+            "WHEN YOU CANNOT ANSWER\n"
+            f"If you cannot answer the message from the approved answers, the rules "
+            f"or your own knowledge — do not guess and do not promise to check "
+            f"later: answer with exactly {rules_service.UNANSWERED_MARKER} and "
+            f"nothing else."
+        )
 
     return "\n\n".join(p for p in parts if p)
 

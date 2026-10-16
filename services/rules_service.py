@@ -269,6 +269,26 @@ def toggle(rule_id: int) -> bool | None:
 # =============================================================================
 # Unanswered questions
 # =============================================================================
+def is_no_answer(reply: str) -> bool:
+    """True when the model used the ``NO_ANSWER`` escape hatch.
+
+    The marker may arrive on its own, inside a sentence or with punctuation —
+    any reply that *is* the marker once stripped counts.
+    """
+    text = (reply or "").strip()
+    if not text:
+        return False
+    cleaned = text.strip(" *_`\"'\u200f\u200e.,!?:;\n\t").strip().upper()
+    return cleaned == UNANSWERED_MARKER
+
+
+def clean_no_answer(reply: str) -> str:
+    """Drop the marker (and any line holding it) from a reply."""
+    lines = [line for line in (reply or "").splitlines()
+             if line.strip().strip("*_`").strip().upper() != UNANSWERED_MARKER]
+    return "\n".join(lines).strip()
+
+
 def record_unanswered(business_connection_id: str | None, customer_chat_id: int | None,
                       question: str) -> int | None:
     """Remember a question the model could not answer (owner notification follows)."""

@@ -145,3 +145,73 @@ def test_every_provider_has_localised_texts():
     for provider in providers.ordered():
         assert f"prov.{provider.id}.label" in english
         assert f"prov.{provider.id}.docs" in english
+
+
+def test_no_duplicate_keys_in_the_catalogs():
+    """A duplicated key silently shadows the earlier one (dict literal).
+
+    The catalogs are appended to by scripts, so this is a real failure mode:
+    the second definition wins and the first translation disappears unnoticed.
+    """
+    import ast
+    import collections
+    from pathlib import Path
+
+    root = Path(i18n.__file__).resolve().parent
+    for name in ("en.py", "ar.py"):
+        tree = ast.parse((root / name).read_text(encoding="utf-8"))
+        keys: list[str] = []
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+                continue
+            if not isinstance(node.value, ast.Dict):
+                continue
+            target = node.target if isinstance(node, ast.AnnAssign) else node.targets[0]
+            if getattr(target, "id", "") == "STRINGS":
+                keys = [key.value for key in node.value.keys]
+                break
+        assert keys, f"{name} has no STRINGS dict"
+        duplicates = [key for key, count in collections.Counter(keys).items() if count > 1]
+        assert duplicates == [], f"{name}: duplicate keys {duplicates}"
+
+
+def test_every_literal_key_used_in_the_code_exists():
+    """Every ``i18n.t("…")`` written in the code must be in both catalogs.
+
+    Dynamic keys (f-strings, prefixes) are skipped — they are exercised by the
+    screen-rendering integration tests instead.
+    """
+    import ast
+    from pathlib import Path
+
+    root = Path(i18n.__file__).resolve().parent.parent
+    english, arabic = i18n.catalog("en"), i18n.catalog("ar")
+    missing: list[str] = []
+
+    for path in root.rglob("*.py"):
+        parts = set(path.parts)
+        if parts & {".venv", "tests", "__pycache__"}:
+            continue
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+        except SyntaxError:                    # pragma: no cover - not our code
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            name = getattr(func, "attr", None) or getattr(func, "id", None)
+            if name not in ("t", "_t", "translate"):
+                continue
+            if isinstance(func, ast.Attribute) and getattr(func.value, "id", "") != "i18n":
+                continue
+            if not node.args:
+                continue
+            first = node.args[0]
+            if not isinstance(first, ast.Constant) or not isinstance(first.value, str):
+                continue
+            key = first.value
+            if key not in english or key not in arabic:
+                missing.append(f"{path.name}: {key}")
+
+    assert missing == []

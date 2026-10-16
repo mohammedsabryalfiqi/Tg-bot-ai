@@ -102,6 +102,11 @@ def _join_buttons() -> list[list]:
     return rows
 
 
+def join_rows() -> list[list]:
+    """One URL button per required channel (no verify button)."""
+    return _join_buttons()
+
+
 def join_keyboard():
     """Keyboard with a join button per channel; None when nothing to show."""
     from telebot import types
@@ -122,7 +127,11 @@ def _cache_fresh(checked_at: str | None) -> bool:
 
 
 def _is_member(chat_ref: str, user_id: int) -> bool:
-    info = telegram_api.get_chat_member(chat_ref, user_id)
+    try:
+        info = telegram_api.get_chat_member(chat_ref, user_id)
+    except Exception:
+        log.debug("getChatMember blew up for %s", chat_ref, exc_info=True)
+        return True                            # unknown => never block
     if not info:
         # Unknown (no permission, private invite, network): never block a real
         # person because the *bot* could not check.
@@ -143,6 +152,19 @@ def missing_channels(user_id: int, *, force: bool = False) -> list:
     except Exception:                      # pragma: no cover - cache is best effort
         log.debug("could not cache the membership check", exc_info=True)
     return missing
+
+
+def was_verified_before(user_id: int) -> bool:
+    """True when a cached membership check already passed for this user.
+
+    Used to copy only the *first* message of a chat that just joined, instead of
+    forwarding every later message to the owner.
+    """
+    try:
+        cached = database.get_gate_check(user_id)
+    except Exception:                      # pragma: no cover - cache is best effort
+        return False
+    return bool(cached is not None and cached["all_ok"] and _cache_fresh(cached["checked_at"]))
 
 
 def subscription_ok(user_id: int) -> bool:

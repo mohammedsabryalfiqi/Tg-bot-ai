@@ -340,6 +340,18 @@ def on_owner_pending_input(message) -> None:
     elif kind == "reply_to_chat":
         from handlers import owner_tools
         owner_tools.apply_pending(message, kind, context)
+    elif kind in ("rules_text", "rule_edit"):
+        from handlers import rules as rules_handler
+        rules_handler.PENDING_KINDS[kind](message, kind, context)
+    elif kind == "res_text":
+        from handlers import resources as resources_handler
+        resources_handler.apply_pending(message, kind, context)
+    elif kind == "unans_answer":
+        from handlers import unanswered
+        unanswered.apply_pending(message, kind, context)
+    elif kind in ("gate_price", "gate_free", "gate_channel"):
+        from handlers import gates
+        gates.apply_pending(message, kind, context)
     else:
         database.clear_owner_pending_input(owner)
 

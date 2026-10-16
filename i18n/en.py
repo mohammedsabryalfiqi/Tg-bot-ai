@@ -1294,8 +1294,158 @@ STRINGS: dict[str, str] = {
     "codex.err.not_logged_in": "Codex isn't logged in — run `codex login` (Sign in with ChatGPT).",
     "codex.err.failed": "Codex failed to generate a reply. See logs.",
     "codex.err.empty": "Codex returned an empty reply.",
-
-    # ==== append-below ====    # ==== append-below ====
+    "kbd.rule.add": "✍️ Send instructions",
+    "kbd.rule.list": "📃 Rules list",
+    "kbd.rule.ask_questions": "❓ Unanswered questions",
+    "kbd.rule.approve": "✅ Approve and apply",
+    "kbd.rule.edit": "✏️ Edit the text and resend",
+    "kbd.rule.discard": "🗑 Discard",
+    "kbd.res.add": "🔗 Add a resource",
+    "kbd.res.list": "📃 Resources list",
+    "kbd.unans.answer": "✍️ Answer",
+    "kbd.unans.ignore": "🚫 Ignore",
+    "kbd.gate.subscription": "🔒 Forced subscription (channels)",
+    "kbd.gate.stars": "⭐ Paid messages (Stars)",
+    "kbd.gate.list": "📃 What is required now",
+    "kbd.gate.add_channel": "➕ Add a channel/group",
+    "kbd.gate.refund": "↩️ Refund this star payment",
+    "kbd.paid.buy": "⭐ Pay {stars} and send my message",
+    # =========================================================================
+    # handlers/gates.py — entry gates (/gate)
+    # =========================================================================
+    "gate.title": "🚪 <b>Entry gates</b>",
+    "gate.body": (
+        "Both gates are off by default and apply to the <b>private messages</b> "
+        "people send to this bot. Telegram Business customer chats are never "
+        "gated, so nothing that works today stops working."
+    ),
+    "gate.hint": "Turn them on here whenever you are ready.",
+    "gate.sub.title": "🔒 <b>Forced subscription</b>",
+    "gate.sub.body": (
+        "Everyone must join the channels/groups below before the bot answers. "
+        "People get join buttons, then a ✅ button that re-checks."
+    ),
+    "gate.sub.empty": "No channels yet.",
+    "gate.sub.add_hint": "Current state: <b>{state}</b>",
+    "gate.sub.ask": (
+        "Send the channel/group as <code>@username</code> or its numeric id, or "
+        "<code>@username | Title | invite-link</code>. The bot must be an admin "
+        "there to check membership."
+    ),
+    "gate.sub.saved": "✅ Added #{id} <b>{title}</b> (<code>{ref}</code>).",
+    "gate.sub.on_alert": "Forced subscription is ON",
+    "gate.sub.off_alert": "Forced subscription is OFF",
+    "gate.sub.row_on": "Enabled ✅",
+    "gate.sub.row_off": "Disabled ⏸",
+    "gate.sub.channel": "channel",
+    "gate.sub.group": "group",
+    "gate.stars.title": "⭐ <b>Paid messages (Telegram Stars)</b>",
+    "gate.stars.body": (
+        "Each message costs the number of stars you set. The bot answers the "
+        "first free messages, then asks for stars and delivers the message once "
+        "Telegram confirms the payment."
+    ),
+    "gate.stars.enabled": "Paid messages: <b>{state}</b>",
+    "gate.stars.price": "Price per message: <b>{stars}</b> stars",
+    "gate.stars.free": "Free messages before paying: <b>{count}</b>",
+    "gate.stars.earned": "Paid messages: <b>{count}</b> · stars earned: <b>{stars}</b>",
+    "gate.stars.need_price": "⚠️ Type a price above 0 — until then the gate stays open.",
+    "gate.stars.hint": (
+        "Tap a value to change it, or open /settings → Grounding for the same "
+        "switches."
+    ),
+    "gate.stars.on_alert": "Paid messages are ON",
+    "gate.stars.off_alert": "Paid messages are OFF",
+    "gate.price.ask": "⭐ Send the price in stars as a number (e.g. 50).",
+    "gate.price.bad": "Send the price as digits only.",
+    "gate.price.range": "Send a number between 1 and {max}.",
+    "gate.price.saved": "✅ Price set to <b>{stars}</b> stars; paid messages are on.",
+    "gate.free.ask": "Send how many free messages each person gets (0 = none).",
+    "gate.free.bad": "Send the number as digits only.",
+    "gate.free.saved": "✅ Free messages before paying: <b>{count}</b>.",
+    "gate.cb.type": "Send the value as your next message.",
+    "gate.list.title": "📃 <b>What is required now</b>",
+    "gate.list.payments": "<b>Recent payments</b>",
+    "gate.list.payment_row": "#{id} chat <code>{chat_id}</code> — {stars}⭐ ({status})",
+    "gate.refunded": "Marked as refunded.",
+    "gate.refund_missing": "Payment not found.",
+    "gate.status.subscription": "Forced subscription: <b>{state}</b> ({count} chat(s))",
+    "gate.status.payments": "Paid messages: <b>{state}</b>",
+    "gate.status.price": "Price: <b>{stars}</b> stars",
+    "gate.status.free": "Free messages first: <b>{count}</b>",
+    "gate.status.earned": "Paid: <b>{count}</b> · stars: <b>{stars}</b>",
+    # --- what the visitor sees ---
+    "gate.user.sub": (
+        "🔒 قبل ما أقدر أرد عليك، لازم تشترك في القنوات/الجروبات دي:\n\n{list}\n\n"
+        "بعد ما تشترك اضغط ✅ تحقّق."
+    ),
+    "gate.user.sub_ok": "✅ تمام، اشتراكك متأكد. ابعت رسالتك تاني 👇",
+    "gate.user.still_missing": "لسه مشتركش في:\n{list}",
+    "gate.user.pay": (
+        "⭐ الرسالة دي بـ {stars} نجمة.\n"
+        "اضغط الزرار تحت لدفع {stars} نجمة، وبعد الدفع هبعت رسالتك في الحال."
+    ),
+    "gate.user.free": "🎁 فاضل لك {left} رسالة مجانية.",
+    "gate.pay.expired": "الفاتورة دي انتهت — ابعت رسالتك تاني.",
+    "gate.pay.done": "✅ الدفع تم! بقرا رسالتك دلوقتي…",
+    "gate.pay.failed": "⚠️ الدفع مكملش. جرّب تاني.",
+    "gate.owner.copy": (
+        "⭐ <b>رسالة مدفوعة ({stars} نجمة)</b>\n"
+        "من: <b>{name}</b> (المحادثة <code>{chat_id}</code>)\n\n"
+        "<b>الرسالة:</b>\n<i>{text}</i>\n\n"
+        "<b>الرد:</b>\n{reply}"
+    ),
+    "kbd.gate.stars_toggle": "⭐ Turn paid messages on/off",
+    "kbd.gate.price": "💲 Set the price (stars)",
+    "kbd.gate.free": "🎁 Free messages before paying",
+    "main.cmd.rules": "Instructions & topic rules",
+    "main.cmd.unanswered": "Questions the bot could not answer",
+    "main.cmd.resources": "Resources the bot can search",
+    "main.cmd.gate": "Entry gates (subscribe / stars)",
+    "set.group.learning": "Learning (rules & resources)",
+    "set.group.gate": "Entry gates (private messages)",
+    "set.opt.rules_enabled": "Follow my topic rules",
+    "set.opt.rules_enabled.hint": (
+        "Apply the rules you approved from /rules to every reply."
+    ),
+    "set.opt.resources_enabled": "Let the bot search my resources",
+    "set.opt.resources_enabled.hint": (
+        "Use the websites and Telegram groups/channels added in /resources when "
+        "they help answer."
+    ),
+    "set.opt.unanswered_enabled": "Ask me about questions it cannot answer",
+    "set.opt.unanswered_enabled.hint": (
+        "The bot says it will ask the team, then sends you the question from "
+        "/unanswered; your answer is learned as a quick answer."
+    ),
+    "set.opt.require_subscription_enabled": "Force subscription to my channels",
+    "set.opt.require_subscription_enabled.hint": (
+        "People must join before the bot answers; manage the list in /gate. "
+        "Applies to private messages only."
+    ),
+    "set.opt.paid_messages_enabled": "Charge stars for messages",
+    "set.opt.paid_messages_enabled.hint": (
+        "Each message costs the price below. Set the price to 0 to keep the gate "
+        "open. Applies to private messages only."
+    ),
+    "set.opt.paid_message_stars": "Price per message (stars)",
+    "set.opt.paid_message_stars.hint": (
+        "The number of Telegram Stars a person pays before their message reaches "
+        "you. Nothing is charged while it is 0."
+    ),
+    "set.opt.paid_message_free_count": "Free messages before paying",
+    "set.opt.gate_copy_to_owner": "Send me a copy of gated messages",
+    "set.opt.gate_copy_to_owner.hint": (
+        "After a gated message is delivered, the bot forwards you the message and "
+        "the reply it sent."
+    ),
+    "kbd.gate.verify": "✅ Check my subscription",
+    "gate.user.still_missing_alert": "You have not joined yet",
+    "gate.invoice.title": "{name}: paid message",
+    "gate.invoice.default_title": "Paid message",
+    "gate.invoice.desc": "Your message is delivered to {name} once Telegram confirms the payment ({stars} star).",
+    "gate.invoice.label": "Message of the day",
+    # ==== append-below ====    # ==== append-below ====    # ==== append-below ====
 
     # =========================================================================
     # services/rules_service.py — topic rules + unanswered questions

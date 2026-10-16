@@ -35,10 +35,14 @@ from handlers import (
     business_updates,
     direct_messages,
     faq as faq_handler,
+    gates,
     knowledge_base,
     owner_commands,
     owner_tools,
+    resources,
+    rules,
     settings as settings_handler,
+    unanswered,
 )
 from services import ai_service, file_service, providers
 
@@ -146,7 +150,7 @@ def register_handlers(bot: telebot.TeleBot, cfg: config.Config) -> None:
     # Order = match priority for `message` updates.
     #   1. the claim handler (only active while the bot has no owner)
     #   2. owner commands / settings / approvals (pending-input catcher)
-    #   3. feature menus (AI, FAQ, KB, tools)
+    #   3. feature menus (AI, FAQ, KB, rules, resources, gates, tools)
     #   4. the business pipeline
     #   5. the catch-all fallback (last)
     security.register_claim_handler(bot)
@@ -157,6 +161,12 @@ def register_handlers(bot: telebot.TeleBot, cfg: config.Config) -> None:
     faq_handler.register(bot, cfg)
     owner_tools.register(bot, cfg)
     knowledge_base.register(bot, cfg)
+    # Owner instructions, shareable resources, skipped questions and the two
+    # entry gates (private messages only).
+    rules.register(bot, cfg)
+    resources.register(bot, cfg)
+    unanswered.register(bot, cfg)
+    gates.register(bot, cfg)
     business_updates.register(bot, cfg)
     # Private messages addressed to the bot itself (no Telegram Business needed).
     direct_messages.register(bot, cfg)
@@ -181,6 +191,10 @@ BOT_COMMANDS = [
     ("chats", "main.cmd.chats"),
     ("stats", "main.cmd.stats"),
     ("instructions", "main.cmd.instructions"),
+    ("rules", "main.cmd.rules"),
+    ("unanswered", "main.cmd.unanswered"),
+    ("resources", "main.cmd.resources"),
+    ("gate", "main.cmd.gate"),
     ("help", "main.cmd.help"),
 ]
 

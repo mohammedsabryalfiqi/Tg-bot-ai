@@ -343,7 +343,8 @@ def test_every_screen_renders_in_arabic_without_missing_keys(wired_owned, monkey
 
     commands = ["/start", "/help", "/setup", "/mode", "/direct", "/language",
                 "/ai", "/freeai", "/faq", "/kb", "/status", "/health",
-                "/settings", "/chats", "/stats", "/instructions", "/connections"]
+                "/settings", "/chats", "/stats", "/instructions", "/connections",
+                "/rules", "/unanswered", "/resources", "/gate"]
     rendered: list[str] = []
     with caplog.at_level("WARNING"):
         for index, command in enumerate(commands, start=400):
@@ -355,6 +356,14 @@ def test_every_screen_renders_in_arabic_without_missing_keys(wired_owned, monkey
         # A setup step screen (the buttons on the checklist).
         wired_owned.bot.process_new_updates([_callback("tool:setup_step:ai", update_id=500)])
         rendered += wired_owned.rec.texts(OWNER_ID)
+
+        # The sub-screens of the new menus (they are edits, not new messages).
+        for index, data in enumerate(["set:group:learning", "set:group:gate",
+                                      "rule:add", "rule:list", "res:add", "res:list",
+                                      "unans:list", "gate:sub", "gate:stars",
+                                      "gate:list"], start=560):
+            wired_owned.bot.process_new_updates([_callback(data, update_id=index)])
+        rendered += [text for text, _chat, _mid in wired_owned.rec.edits]
 
     problems = [record.getMessage() for record in caplog.records
                 if "missing translation" in record.getMessage()
@@ -456,3 +465,228 @@ def test_business_connection_update_is_announced(wired):
     })])
     assert wired.db.get_business_connection("bc9") is not None
     assert any("Business connection enabled" in text for text in wired.rec.texts(OWNER_ID))
+
+
+# --- topic rules, unanswered questions and the two entry gates ----------------
+def _buttons(markup) -> list[tuple[str, str]]:
+    """(text, callback_data) for every inline button in a markup."""
+    rows = getattr(markup, "keyboard", None) or []
+    return [(button.text, getattr(button, "callback_data", "") or "")
+            for row in rows for button in row]
+
+
+def _rules_env(wired_owned, monkeypatch, reply: str = "تمام 👌"):
+    """A ready direct-message pipeline with a fixed (fake) model answer."""
+    wired_owned.db.set_setting("ai_provider", "pollinations")
+    wired_owned.db.set_setting("auto_reply_enabled", True)
+    wired_owned.db.set_setting("approval_mode_enabled", False)
+    wired_owned.db.set_setting("reply_debounce_seconds", 0.0)
+    monkeypatch.setattr("services.ai_service.chat", lambda messages: reply)
+    return wired_owned
+
+
+def test_rules_command_renders_and_drafts_an_instruction(wired_owned, monkeypatch):
+    wired_owned.bot.process_new_updates([_dm("/rules", update_id=600)])
+    assert any("topic rules" in text.lower() for text in wired_owned.rec.texts(OWNER_ID))
+
+    # The AI splits the owner's paragraph into rules, but nothing is live yet.
+    monkeypatch.setattr("services.ai_service.is_ready", lambda: True)
+    monkeypatch.setattr("services.ai_service.chat", lambda messages: (
+        '{"rules": [{"topic": "الأسعار", "rule": "السعر 500 جنيه."}], "questions": []}'
+    ))
+    wired_owned.rec.messages.clear()
+    wired_owned.bot.process_new_updates([_dm("/rules_add السعر 500 جنيه", update_id=601)])
+
+    assert wired_owned.db.count_topic_rules(enabled_only=True) == 0
+    assert wired_owned.db.count_topic_rules(enabled_only=False) == 1
+    buttons = [b for _chat, _text, kw in wired_owned.rec.messages
+               if kw.get("reply_markup") for b in _buttons(kw["reply_markup"])]
+    assert any(data.startswith("rule:ok:") for _text, data in buttons)
+
+    # ✅ makes them live.
+    batch = wired_owned.db.list_topic_rules(enabled_only=False)[0]["batch"]
+    wired_owned.bot.process_new_updates([_callback(f"rule:ok:{batch}", update_id=602)])
+    assert wired_owned.db.count_topic_rules(enabled_only=True) == 1
+    assert "السعر 500 جنيه" in wired_owned.db.list_topic_rules()[0]["rule"]
+
+    # ... and from now on every reply is composed with the owner's rule.
+    from services import prompt_service
+    assert "السعر 500 جنيه" in prompt_service.build_system_prompt()
+
+
+def test_an_approved_rule_reaches_the_model(wired_owned, monkeypatch):
+    from services import rules_service
+
+    _rules_env(wired_owned, monkeypatch)
+    # Draft it the offline way (no AI needed), then approve it.
+    with monkeypatch.context() as offline:
+        offline.setattr("services.ai_service.is_ready", lambda: False)
+        draft = rules_service.organize("متعملش خصم من نفسك")
+    rules_service.approve(draft.batch)
+
+    seen: list[list[dict]] = []
+    monkeypatch.setattr("services.ai_service.chat",
+                        lambda messages: seen.append(messages) or "حاضر")
+
+    wired_owned.bot.process_new_updates([_direct_message("في خصم؟")])
+
+    assert seen, "the model should have been called"
+    system = seen[0][0]["content"]
+    assert "TOPIC RULES" in system and "متعملش خصم من نفسك" in system
+    assert "حاضر" in wired_owned.rec.texts(4242)
+
+
+def test_no_answer_asks_the_owner_and_files_the_question(wired_owned, monkeypatch):
+    """The model says NO_ANSWER -> polite notice to the person, question to the owner."""
+    _rules_env(wired_owned, monkeypatch, reply="NO_ANSWER")
+
+    wired_owned.bot.process_new_updates([_direct_message("بتشتغلوا الجمعة؟")])
+
+    assert wired_owned.db.count_unanswered("open") == 1
+    question = wired_owned.db.list_unanswered("open")[0]
+    assert question["customer_chat_id"] == 4242
+
+    # The person was told the team will get back to them — not the marker.
+    customer_texts = wired_owned.rec.texts(4242)
+    assert any("الفريق" in text or "team" in text for text in customer_texts)
+    assert all("NO_ANSWER" not in text for text in customer_texts)
+
+    # The owner got the question with an answer button.
+    owner_messages = wired_owned.rec.messages
+    assert any(chat == OWNER_ID and "بتشتغلوا الجمعة؟" in text
+               for chat, text, _kw in owner_messages)
+
+
+def test_the_owner_answer_is_delivered_and_learned(wired_owned, monkeypatch):
+    from services import faq_service
+
+    _rules_env(wired_owned, monkeypatch, reply="NO_ANSWER")
+    wired_owned.bot.process_new_updates([_direct_message("بتشتغلوا الجمعة؟")])
+    question_id = wired_owned.db.list_unanswered("open")[0]["id"]
+
+    wired_owned.rec.messages.clear()
+    wired_owned.bot.process_new_updates([_callback(f"unans:answer:{question_id}",
+                                                   update_id=610)])
+    wired_owned.bot.process_new_updates([_dm("أيوه، من 10 لـ 6.", update_id=611)])
+
+    assert wired_owned.db.count_unanswered("open") == 0
+    assert any("من 10 لـ 6" in text for text in wired_owned.rec.texts(4242))
+    match, _verbatim = faq_service.resolve("بتشتغلوا الجمعة؟")
+    assert match is not None and "من 10 لـ 6" in match.answer
+
+
+def test_subscription_gate_holds_the_message_until_the_person_joins(wired_owned, monkeypatch):
+    wired_owned.db.add_required_channel("@required", title="قناة مطلوبة")
+    wired_owned.db.set_setting("require_subscription_enabled", True)
+    _rules_env(wired_owned, monkeypatch)
+    monkeypatch.setattr("services.gate_service.telegram_api.get_chat_member",
+                        lambda ref, user: {"status": "left"})
+    wired_owned.db.clear_gate_checks()
+
+    wired_owned.bot.process_new_updates([_direct_message("مرحبا")])
+
+    # Held at the gate: no answer, a join button, and nothing for the owner.
+    texts = wired_owned.rec.texts(4242)
+    assert texts and all("تمام" not in text for text in texts)
+    gate_buttons = [b for chat, _t, kw in wired_owned.rec.messages
+                    if chat == 4242 and kw.get("reply_markup")
+                    for b in _buttons(kw["reply_markup"])]
+    assert any(data == "gate:verify" for _text, data in gate_buttons)
+    assert wired_owned.db.count_messages(direction="in") == 0
+    assert not any("مطلوبة" in text for chat, text, _kw in wired_owned.rec.messages
+                   if chat == OWNER_ID)
+
+    # ... and the assistant answers once the membership check passes.
+    wired_owned.rec.messages.clear()
+    monkeypatch.setattr("services.gate_service.telegram_api.get_chat_member",
+                        lambda ref, user: {"status": "member"})
+    wired_owned.db.clear_gate_checks()
+    wired_owned.bot.process_new_updates([_direct_message("مرحبا", update_id=620,
+                                                         message_id=620)])
+    assert "تمام 👌" in wired_owned.rec.texts(4242)
+
+
+def test_business_chats_are_never_gated(wired_owned, monkeypatch):
+    """A Telegram Business customer chat keeps working exactly as before."""
+    wired_owned.db.add_required_channel("@required")
+    wired_owned.db.set_setting("require_subscription_enabled", True)
+    wired_owned.db.set_setting("paid_messages_enabled", True)
+    wired_owned.db.set_setting("paid_message_stars", 50)
+    wired_owned.db.upsert_business_connection("bc1", 999, True, True)
+    wired_owned.db.set_setting("auto_reply_enabled", True)
+    wired_owned.db.set_setting("approval_mode_enabled", False)
+    wired_owned.db.set_setting("reply_debounce_seconds", 0.0)
+    monkeypatch.setattr("services.gate_service.telegram_api.get_chat_member",
+                        lambda ref, user: {"status": "left"})
+    monkeypatch.setattr("services.ai_service.chat", lambda messages: "أهلاً 👋")
+
+    wired_owned.bot.process_new_updates([_business_message("السلام عليكم")])
+
+    assert "أهلاً 👋" in wired_owned.rec.texts(5)
+
+
+def test_star_gate_invoices_then_delivers_after_payment(wired_owned, monkeypatch):
+    wired_owned.db.set_setting("paid_messages_enabled", True)
+    wired_owned.db.set_setting("paid_message_stars", 25)
+    _rules_env(wired_owned, monkeypatch)
+    monkeypatch.setattr("services.ai_service.is_ready", lambda: True)
+
+    invoices: list[dict] = []
+    monkeypatch.setattr("telegram_api.send_star_invoice",
+                        lambda chat_id, **kw: invoices.append(kw) or {"message_id": 1})
+
+    wired_owned.bot.process_new_updates([_direct_message("عايز أطلب")])
+
+    assert invoices and invoices[0]["stars"] == 25
+    assert wired_owned.db.count_paid_messages(status="pending") == 1
+    assert wired_owned.rec.texts(4242)          # the "pay N stars" prompt
+    assert wired_owned.db.count_messages(direction="in") == 0   # not delivered yet
+
+    payload = invoices[0]["payload"]
+    wired_owned.rec.messages.clear()
+    wired_owned.bot.process_new_updates([_update({
+        "update_id": 700,
+        "message": {
+            "message_id": 700, "date": 0,
+            "chat": {"id": 4242, "type": "private"},
+            "from": {"id": 4242, "is_bot": False, "first_name": "Mona"},
+            "successful_payment": {
+                "currency": "XTR", "total_amount": 25, "invoice_payload": payload,
+                "telegram_payment_charge_id": "ch_99", "provider_payment_charge_id": "",
+            },
+        },
+    })])
+
+    assert wired_owned.db.count_paid_messages(status="paid") == 1
+    assert wired_owned.db.sum_stars_earned() == 25
+    assert "تمام 👌" in wired_owned.rec.texts(4242)
+    # The owner got a copy of the paid message.
+    assert any(chat == OWNER_ID and "عايز أطلب" in text
+               for chat, text, _kw in wired_owned.rec.messages)
+
+
+def test_a_paid_message_is_not_answered_when_the_invoice_fails(wired_owned, monkeypatch):
+    wired_owned.db.set_setting("paid_messages_enabled", True)
+    wired_owned.db.set_setting("paid_message_stars", 25)
+    _rules_env(wired_owned, monkeypatch)
+    monkeypatch.setattr("telegram_api.send_star_invoice", lambda chat_id, **kw: None)
+
+    wired_owned.bot.process_new_updates([_direct_message("عايز أطلب")])
+
+    # Telegram refused the invoice: the gate must not swallow the message.
+    assert "تمام 👌" in wired_owned.rec.texts(4242)
+    assert wired_owned.db.count_paid_messages(status="pending") == 0
+
+
+def test_gate_and_rules_owner_screens_render(wired_owned):
+    wired_owned.bot.process_new_updates([_dm("/gate", update_id=630)])
+    assert any("Entry gates" in text for text in wired_owned.rec.texts(OWNER_ID))
+
+    wired_owned.rec.messages.clear()
+    wired_owned.bot.process_new_updates([_dm("/resources", update_id=631)])
+    assert any("Knowledge" in text or "resource" in text.lower()
+               for text in wired_owned.rec.texts(OWNER_ID))
+
+    wired_owned.rec.messages.clear()
+    wired_owned.bot.process_new_updates([_dm("/unanswered", update_id=632)])
+    assert wired_owned.rec.texts(OWNER_ID)

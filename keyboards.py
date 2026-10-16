@@ -8,6 +8,10 @@
   ai:<action>[:arg]         AI provider setup (/ai)
   faq:<action>[:id[:page]]  FAQ / canned answers
   tool:<action>[:arg]       owner tools (mode, chats, setup, health)
+  rule:<action>[:arg]       topic rules (/rules)
+  res:<action>[:arg]        resources (/resources)
+  unans:<action>[:arg]      unanswered questions
+  gate:<action>[:arg]       entry gates (/gate)
   confirm:<yes|no>:<token>  destructive confirmations
 """
 
@@ -338,6 +342,133 @@ def language_menu(current: str) -> types.InlineKeyboardMarkup:
 # =============================================================================
 # Confirmation
 # =============================================================================
+# =============================================================================
+# Rules, resources, unanswered questions, gates
+# =============================================================================
+def rules_menu() -> types.InlineKeyboardMarkup:
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    kb.add(
+        _btn(i18n.t("kbd.rule.add"), cb("rule", "add")),
+        _btn(i18n.t("kbd.rule.list"), cb("rule", "list", 0)),
+        _btn(i18n.t("kbd.rule.ask_questions"), cb("unans", "list", 0)),
+    )
+    kb.add(_btn(i18n.t("kbd.close"), cb("rule", "close")))
+    return kb
+
+
+def rules_draft(batch: str) -> types.InlineKeyboardMarkup:
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    kb.add(
+        _btn(i18n.t("kbd.rule.approve"), cb("rule", "ok", batch), "success"),
+        _btn(i18n.t("kbd.rule.edit"), cb("rule", "edit", batch)),
+        _btn(i18n.t("kbd.rule.discard"), cb("rule", "no", batch), "danger"),
+    )
+    return kb
+
+
+def rules_list(rows: list) -> types.InlineKeyboardMarkup:
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    for row in rows:
+        mark = "✅" if row["enabled"] else "⏸"
+        kb.add(_btn(f"{mark} #{row['id']} {(row['topic'] or row['rule'])[:40]}",
+                    cb("rule", "toggle", row["id"])))
+    kb.add(_btn(i18n.t("kbd.back"), cb("rule", "root")))
+    kb.add(_btn(i18n.t("kbd.close"), cb("rule", "close")))
+    return kb
+
+
+def resources_menu() -> types.InlineKeyboardMarkup:
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    kb.add(
+        _btn(i18n.t("kbd.res.add"), cb("res", "add")),
+        _btn(i18n.t("kbd.res.list"), cb("res", "list")),
+    )
+    kb.add(_btn(i18n.t("kbd.close"), cb("res", "close")))
+    return kb
+
+
+def resources_list(rows: list) -> types.InlineKeyboardMarkup:
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    for row in rows:
+        mark = "✅" if row["enabled"] else "⏸"
+        icon = {"telegram": "📣", "link": "🔗", "text": "📄"}.get(row["kind"], "🔗")
+        kb.add(_btn(f"{mark} {icon} #{row['id']} {(row['title'] or row['url'])[:34]}",
+                    cb("res", "toggle", row["id"])))
+    kb.add(_btn(i18n.t("kbd.back"), cb("res", "root")))
+    kb.add(_btn(i18n.t("kbd.close"), cb("res", "close")))
+    return kb
+
+
+def unanswered_list(rows: list, page: int = 0, per_page: int = 5) -> types.InlineKeyboardMarkup:
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    start = page * per_page
+    for row in rows[start:start + per_page]:
+        question = (row["question"] or "").replace("\n", " ")[:44]
+        kb.add(_btn(f"#{row['id']} {question}", cb("unans", "open", row["id"])))
+    nav = []
+    if page > 0:
+        nav.append(_btn(i18n.t("kbd.prev"), cb("unans", "list", page - 1)))
+    if start + per_page < len(rows):
+        nav.append(_btn(i18n.t("kbd.next"), cb("unans", "list", page + 1)))
+    if nav:
+        kb.add(*nav)
+    kb.add(_btn(i18n.t("kbd.close"), cb("unans", "close")))
+    return kb
+
+
+def unanswered_card(question_id: int) -> types.InlineKeyboardMarkup:
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    kb.add(
+        _btn(i18n.t("kbd.unans.answer"), cb("unans", "answer", question_id), "success"),
+        _btn(i18n.t("kbd.unans.ignore"), cb("unans", "ignore", question_id), "danger"),
+        _btn(i18n.t("kbd.back"), cb("unans", "list", 0)),
+    )
+    return kb
+
+
+def gate_menu(stats: dict) -> types.InlineKeyboardMarkup:
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    kb.add(_btn(i18n.t("kbd.gate.subscription"), cb("gate", "sub")))
+    kb.add(_btn(i18n.t("kbd.gate.stars"), cb("gate", "stars")))
+    kb.add(_btn(i18n.t("kbd.gate.list"), cb("gate", "list")))
+    kb.add(_btn(i18n.t("kbd.close"), cb("gate", "close")))
+    return kb
+
+
+def required_channels(rows: list) -> types.InlineKeyboardMarkup:
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    for row in rows:
+        mark = "✅" if row["enabled"] else "⏸"
+        kb.add(_btn(f"{mark} {row['title'] or row['chat_ref']}",
+                    cb("gate", "toggle_channel", row["id"])))
+    kb.add(_btn(i18n.t("kbd.gate.add_channel"), cb("gate", "add_channel")))
+    kb.add(_btn(i18n.t("kbd.back"), cb("gate", "root")))
+    return kb
+
+
+def pay_button(stars: int, payload: str) -> types.InlineKeyboardMarkup:
+    """Button that re-opens the Stars invoice for a parked message."""
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    kb.add(_btn(i18n.t("kbd.paid.buy", stars=stars), cb("pay", "buy", payload)))
+    return kb
+
+
+def subscription_gate() -> types.InlineKeyboardMarkup:
+    """Join buttons + the re-check button shown to a gated visitor."""
+    from services import gate_service
+
+    rows = gate_service.join_rows()
+    rows.append([_btn(i18n.t("kbd.gate.verify"), cb("gate", "verify"), "success")])
+    return types.InlineKeyboardMarkup(rows)
+
+
+def paid_message_actions(message_id: int) -> types.InlineKeyboardMarkup:
+    """Owner-side refund control for a confirmed Stars payment."""
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    kb.add(_btn(i18n.t("kbd.gate.refund"), cb("gate", "refund", message_id), "danger"))
+    return kb
+
+
 def confirm(token: str) -> types.InlineKeyboardMarkup:
     kb = types.InlineKeyboardMarkup(row_width=2)
     kb.add(

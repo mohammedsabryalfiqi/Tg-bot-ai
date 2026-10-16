@@ -111,7 +111,9 @@ def _store_in_knowledge_base(title: str, text: str, url: str) -> int | None:
     try:
         from services import kb_service
         name = (title or url or "resource")[:MAX_TITLE_CHARS]
-        result = kb_service.add_text(f"[Resource] {name}\nSource: {url}\n\n{body}")
+        header = f"Source: {url}" if url else ""
+        result = kb_service.add_text(f"[Resource] {name}",
+                                     f"{header}\n\n{body}".strip())
         return result.get("item_id") if isinstance(result, dict) else None
     except Exception:
         log.warning("could not add the fetched text to the knowledge base", exc_info=True)

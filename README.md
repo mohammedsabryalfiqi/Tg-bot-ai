@@ -58,6 +58,25 @@ The bot token comes from **@BotFather**.
   language.
 - 💬 **Direct messages work without Telegram Business**: people who message the bot
   itself get an AI reply (`/direct on|off`, on by default).
+- 🧠 **Topic rules you write in your own words** (`/rules`): send the instruction
+  ("never discount on your own", "delivery in Damietta takes two days", prices,
+  hours), the AI splits it into small topic rules and shows you a **draft**; only
+  the rules you approve (✅) are added to every future reply. Nothing is applied
+  behind your back.
+- ❓ **Questions it could not answer** (`/unanswered`): instead of guessing, the
+  assistant tells the person your team will get back to them and sends **you** the
+  question. Your answer is delivered to them *and* remembered as a quick answer, so
+  the same question never needs the AI again.
+- 🔗 **Resources it can search** (`/resources`): add a website, a platform, a
+  Telegram group/channel or a block of text. Web pages are fetched into the
+  knowledge base, and the reference list is handed to the assistant so it shares
+  **real** links instead of inventing them.
+- 🚪 **Entry gates** (`/gate`), both **off by default** and both limited to private
+  messages (a Telegram Business chat is never gated):
+  **forced subscription** to your channels/groups (join buttons + a ✅ re-check,
+  cached 5 minutes) and **paid messages with Telegram Stars** — you type the price,
+  the first *N* messages can be free, and a message is only delivered after
+  Telegram confirms the payment. Gated chats also get a copy sent to you (switchable).
 
 ### Normal bot vs. Business managed bot
 
@@ -222,6 +241,10 @@ watch the reply arrive from your own account. `/health` checks everything,
 | `/reply <chat_id> <text>` | Send a message yourself from the business account (pauses the bot for that chat) |
 | `/takeover <id>` · `/handback <id>` | Pause / resume the AI for one chat |
 | `/instructions [text\|clear]` | Standing instruction added to every reply |
+| `/rules` (`/topics`) · `/rules_add` · `/rules_list` · `/rules_del <id>` · `/rules_clear` | Turn a free-form instruction into reviewable **topic rules** (AI splits it, you approve) |
+| `/unanswered` (`/questions`) · `/unanswered_clear` | Questions the assistant could not answer — answer one and it is learned |
+| `/resources` (`/res`) · `/resources_add` · `/resources_list` · `/resources_del <id>` · `/resources_clear` | Websites / platforms / Telegram groups and channels the assistant may use (pages are fetched into the KB) |
+| `/gate` (`/gates`, `/subscribe`) | Entry gates: forced subscription + Telegram Stars paid messages |
 | `/memory_clear` · `/pause_chat` · `/resume_chat` | Memory and pause control |
 | `/auto_on` `/auto_off` · `/approval_on` `/approval_off` | Coarse switches behind `/mode` |
 | `/connections` · `/export` · `/reset` · `/cancel` · `/help` | Connections, JSON backup, cleanup, cancel input, help |
@@ -261,6 +284,14 @@ once.
 | `ai_base_url` | *(empty)* | Custom OpenAI-compatible base URL |
 | `temperature` / `max_tokens` | `0.4` / `800` | Sampling temperature and output cap |
 | `public_direct_bot_chat_enabled` | `false` | Safety flag for direct (non-business) DMs |
+| `rules_enabled` | `true` | Add the approved `/rules` topic rules to every reply |
+| `resources_enabled` | `true` | Let the assistant use the `/resources` list |
+| `unanswered_enabled` | `true` | Say "I'll ask the team" and file the question in `/unanswered` |
+| `require_subscription_enabled` | `false` | **Gate:** everyone must join your channels first (list in `/gate`) |
+| `paid_messages_enabled` | `false` | **Gate:** charge Telegram Stars per message |
+| `paid_message_stars` | `0` | The price you type — **0 means the gate stays open** |
+| `paid_message_free_count` | `0` | How many messages a person gets before paying |
+| `gate_copy_to_owner` | `true` | Send you a copy of a message that went through a gate |
 
 **Safe by default:** with `auto_reply_enabled=false` + `approval_mode_enabled=true`
 nothing reaches a customer until you act.
@@ -275,14 +306,91 @@ business_message ──► guards (bot echo, owner takeover)
                   ──► automation switches, pause state, rate limit
                   ──► batch a burst of messages into one turn
                   ──► quick answers: exact match ⇒ canned reply, verbatim
-                  ──► otherwise prompt = persona + instructions + FAQ + KB + memory
+                  ──► otherwise prompt = persona + instructions + rules
+                      + FAQ + KB + resources + learned answers + memory
                   ──► model (or Codex) ──► signature
+                  ──► NO_ANSWER? ⇒ "I'll ask the team" + question filed for you
                   ──► sensitive? ⇒ approval card, else auto-send (or draft)
                   ──► "typing…" keep-alive while generating
+
+private message to the bot ──► gates (join my channels? / pay N stars?)
+                           ──► the flow above, then a copy to you when it was gated
 ```
 
 Edited / deleted customer messages invalidate the matching pending approvals, so
 you never send a reply to a message that no longer exists.
+
+---
+
+## Entry gates & learning (private messages)
+
+Everything in this section applies to **private messages sent to the bot itself**
+(the `/direct` pipeline). Telegram Business customer chats are never gated, so a
+working setup cannot be shut out by switching a gate on.
+
+### Topic rules — `/rules`
+Send your instructions as one free-form message (`/rules_add`, or the ✍️ button):
+
+```
+/rules_add الأسعار ثابتة 500 جنيه، مفيش خصم من نفسك.
+التوصيل داخل دمياط يومين، وخارجها 3-5 أيام.
+لو حد سأل عن حاجة مش عارفها قولي.
+```
+
+The AI splits that into topic rules and shows the draft with:
+
+| Button | Effect |
+| --- | --- |
+| ✅ Approve and apply | The rules become live and are injected into every future reply |
+| ✏️ Edit | You re-send the text; the old draft is discarded |
+| 🗑 Discard | The draft is deleted, nothing changes |
+
+`/rules_list` shows every rule with a ✅/⏸ toggle (pause without deleting),
+`/rules_del <id>` deletes one, `/rules_clear` empties the list. With no working AI
+backend the instructions are still split locally line by line — the flow never
+depends on the model being up.
+
+### Unanswered questions — `/unanswered`
+When the assistant has nothing to answer with it replies with the exact marker
+`NO_ANSWER`; the pipeline then sends the person a polite "I asked a team member"
+notice and notifies you with the question and a ✍️ button. Your answer is sent to
+whoever asked **and** saved as a quick answer (it also appears in `/faq`), so the
+next identical question is answered instantly and for free. Turn the whole
+behaviour off with `unanswered_enabled` — the assistant then answers normally.
+
+### Resources — `/resources`
+```
+/resources_add https://example.com/prices | صفحة الأسعار | محدثة كل شهر
+/resources_add https://t.me/mychannel
+/resources_add استبدال خلال 14 يوم بفاتورة
+```
+A web page is fetched (8s timeout, skipped for `t.me` links) and stored in the
+knowledge base; the link itself is kept as a reference the assistant may hand out.
+`/resources_list` toggles a resource on/off.
+
+### Forced subscription — `/gate` → 🔒
+1. `/gate` → **🔒 Forced subscription** → **➕ Add a channel/group**, then send
+   `@username`, the numeric id, or `@username | Title | invite-link`.
+2. Press the gate row to switch it on (`require_subscription_enabled`).
+
+The bot must be an **administrator** in that channel to read membership. People who
+have not joined get a join button per channel plus **✅ Check my subscription**;
+the answer is cached 5 minutes. If the bot *cannot* check (no permission, private
+invite, network error) the message is allowed rather than blocked — a person is
+never locked out because the bot could not look.
+
+### Paid messages (Telegram Stars) — `/gate` → ⭐
+1. `/gate` → **⭐ Paid messages** → **💲 Set the price** and type the number of
+   stars (this both sets the price and switches the gate on).
+2. Optionally **🎁 Free messages before paying** — those go through untouched.
+
+Stars need no payment provider and no card: the invoice uses currency `XTR`, the
+person pays inside Telegram, the bot answers the `pre_checkout_query` and only
+delivers the parked message after `successful_payment`. `/gate` → **📃 What is
+required now** shows the switches, the price and the recent payments; the owner
+copy of a paid message carries a **↩️ Refund** button for your records.
+The message is **not** delivered before the payment lands, and if Telegram refuses
+the invoice the message is answered normally (the gate never eats a message).
 
 ---
 
