@@ -18,6 +18,7 @@ path) — they never reach these command/DM handlers.
 from __future__ import annotations
 
 import functools
+import contextlib
 import hmac
 import logging
 import secrets
@@ -90,6 +91,57 @@ def owner_id() -> int | None:
 def is_owner(user_id) -> bool:
     oid = owner_id()
     return oid is not None and user_id == oid
+
+
+def operator_id() -> int | None:
+    """Current account administrator (primary owner for tenant zero)."""
+    tenant = database.tenant_id()
+    return tenant or owner_id()
+
+
+def tenant_for_user(user_id: int | None) -> int | None:
+    """Resolve a user's private assistant namespace, or deny access."""
+    if user_id is None:
+        return None
+    if is_owner(user_id):
+        return 0
+    try:
+        return int(user_id) if database.is_assistant_admin(int(user_id)) else None
+    except Exception:
+        return None
+
+
+@contextlib.contextmanager
+def operator_scope(user_id: int | None):
+    tenant = tenant_for_user(user_id)
+    if tenant is None:
+        raise PermissionError("not an assistant administrator")
+    with database.tenant_scope(tenant):
+        yield tenant
+
+
+def run_as_operator(message, function):
+    user = getattr(message, "from_user", None)
+    with operator_scope(getattr(user, "id", None)):
+        return function()
+
+
+def is_operator_msg(message) -> bool:
+    user = getattr(message, "from_user", None)
+    return bool(user) and tenant_for_user(user.id) is not None
+
+
+def is_operator_call(call) -> bool:
+    user = getattr(call, "from_user", None)
+    return bool(user) and tenant_for_user(user.id) is not None
+
+
+def has_pending_operator_input(message) -> bool:
+    user = getattr(message, "from_user", None)
+    if not user or tenant_for_user(user.id) is None:
+        return False
+    with operator_scope(user.id):
+        return database.has_owner_pending_input(operator_id())
 
 
 def is_owner_msg(message) -> bool:
@@ -199,10 +251,12 @@ def owner_only(handler):
     """Decorator for message handlers registered WITHOUT a func predicate."""
     @functools.wraps(handler)
     def wrapper(message, *args, **kwargs):
-        if not is_owner_msg(message):
+        user = getattr(message, "from_user", None)
+        if not user or tenant_for_user(user.id) is None:
             handle_non_owner_dm(message)
             return None
-        return handler(message, *args, **kwargs)
+        with operator_scope(user.id):
+            return handler(message, *args, **kwargs)
     return wrapper
 
 
@@ -210,13 +264,15 @@ def owner_only_callback(handler):
     """Decorator for callback-query handlers."""
     @functools.wraps(handler)
     def wrapper(call, *args, **kwargs):
-        if not is_owner_call(call):
+        user = getattr(call, "from_user", None)
+        if not user or tenant_for_user(user.id) is None:
             try:
                 _bot.answer_callback_query(call.id, "Not authorized.", show_alert=True)
             except Exception:
                 pass
             return None
-        return handler(call, *args, **kwargs)
+        with operator_scope(user.id):
+            return handler(call, *args, **kwargs)
     return wrapper
 
 

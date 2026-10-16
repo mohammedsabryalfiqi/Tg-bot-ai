@@ -32,22 +32,22 @@ PENDING_TTL_MINUTES = 10
 
 def register(bot, cfg) -> None:
     @bot.message_handler(commands=["ai", "ai_setup", "connect_ai", "provider"],
-                         func=security.is_owner_msg)
+                         func=security.is_operator_msg)
     def _ai(message):
-        _safe(lambda: open_root(message.chat.id))
+        security.run_as_operator(message, lambda: _safe(lambda: open_root(message.chat.id)))
 
-    @bot.message_handler(commands=["aimodel"], func=security.is_owner_msg)
+    @bot.message_handler(commands=["aimodel"], func=security.is_operator_msg)
     def _aimodel(message):
-        _safe(lambda: _set_model_from_command(message))
+        security.run_as_operator(message, lambda: _safe(lambda: _set_model_from_command(message)))
 
-    @bot.message_handler(commands=["aitest"], func=security.is_owner_msg)
+    @bot.message_handler(commands=["aitest"], func=security.is_operator_msg)
     def _aitest(message):
-        _safe(lambda: run_test(message.chat.id))
+        security.run_as_operator(message, lambda: _safe(lambda: run_test(message.chat.id)))
 
     @bot.message_handler(commands=["freeai", "free_ai", "freeproviders", "free_providers"],
-                         func=security.is_owner_msg)
+                         func=security.is_operator_msg)
     def _freeai(message):
-        _safe(lambda: open_free(message.chat.id))
+        security.run_as_operator(message, lambda: _safe(lambda: open_free(message.chat.id)))
 
     @bot.callback_query_handler(func=lambda c: c.data and c.data.startswith("ai:"))
     @security.owner_only_callback
@@ -326,7 +326,7 @@ def _ask_for_key(call) -> None:
 def prompt_for_key(chat_id: int, provider: providers.Provider) -> None:
     """Park the conversation and ask for this provider's API key."""
     database.set_owner_pending_input(
-        security.owner_id(), "ai_key", {"provider": provider.id}, PENDING_TTL_MINUTES
+        security.operator_id(), "ai_key", {"provider": provider.id}, PENDING_TTL_MINUTES
     )
     hint = ""
     if provider.key_url:
@@ -363,7 +363,7 @@ def _free_switch(call, provider_id: str) -> None:
 def _ask_for_model(call, provider_id: str | None = None) -> None:
     provider = providers.get_or_default(provider_id or ai_service.active_provider_id())
     database.set_owner_pending_input(
-        security.owner_id(), "ai_model", {"provider": provider.id}, PENDING_TTL_MINUTES
+        security.operator_id(), "ai_model", {"provider": provider.id}, PENDING_TTL_MINUTES
     )
     telegram_api.answer_callback(handlers.bot, call.id, "Type the model name.")
     handlers.bot.send_message(
@@ -375,7 +375,7 @@ def _ask_for_model(call, provider_id: str | None = None) -> None:
 
 
 def _ask_for_base_url(call) -> None:
-    database.set_owner_pending_input(security.owner_id(), "ai_base_url", {}, PENDING_TTL_MINUTES)
+    database.set_owner_pending_input(security.operator_id(), "ai_base_url", {}, PENDING_TTL_MINUTES)
     telegram_api.answer_callback(handlers.bot, call.id, "Send the base URL.")
     handlers.bot.send_message(
         call.message.chat.id,
@@ -407,7 +407,7 @@ def _set_model_from_command(message) -> None:
 # Applying pending inputs (routed from approvals.on_owner_pending_input)
 # =============================================================================
 def apply_pending(message, kind: str, context: dict) -> None:
-    owner = security.owner_id()
+    owner = security.operator_id()
     database.clear_owner_pending_input(owner)
     raw = (getattr(message, "text", "") or "").strip()
     chat_id = message.chat.id

@@ -27,8 +27,9 @@ _FALLBACK_CONTENT = ["text", "document", "photo", "voice", "audio", "video", "st
 def register(bot, cfg) -> None:
     def cmd(commands):
         def deco(fn):
-            bot.message_handler(commands=commands, func=security.is_owner_msg)(
-                lambda message, _fn=fn: _safe(lambda: _fn(message))
+            bot.message_handler(commands=commands, func=security.is_operator_msg)(
+                lambda message, _fn=fn: security.run_as_operator(
+                    message, lambda: _safe(lambda: _fn(message)))
             )
             return fn
         return deco
@@ -53,6 +54,11 @@ def register(bot, cfg) -> None:
     cmd(["setup"])(cmd_setup)
     cmd(["connections"])(cmd_connections)
 
+    # The primary owner alone controls delegated administrator accounts.
+    bot.message_handler(commands=["admin"], func=security.is_owner_msg)(
+        lambda message: _safe(lambda: cmd_admin(message))
+    )
+
     @bot.callback_query_handler(func=lambda c: c.data and c.data.startswith("panel:"))
     @security.owner_only_callback
     def _panel(call):
@@ -68,7 +74,10 @@ def register_fallback(bot, cfg) -> None:
     """The catch-all message handler. MUST be registered last."""
     @bot.message_handler(func=lambda m: True, content_types=_FALLBACK_CONTENT)
     def _fallback(message):
-        _safe(lambda: on_fallback(message))
+        if security.is_operator_msg(message):
+            security.run_as_operator(message, lambda: _safe(lambda: on_fallback(message)))
+        else:
+            _safe(lambda: on_fallback(message))
 
 
 def _safe(fn) -> None:
@@ -82,6 +91,52 @@ def _args(message) -> str:
     text = getattr(message, "text", "") or ""
     parts = text.split(maxsplit=1)
     return parts[1].strip() if len(parts) > 1 else ""
+
+
+def cmd_admin(message) -> None:
+    """Primary-owner management of delegated admin identities.
+
+    /admin <user_id> adds an administrator; /admin remove <user_id> removes
+    one; /admin list lists delegates. Tenant access is activated separately
+    only after the user links a Telegram Business account with the same ID.
+    """
+    parts = _args(message).split()
+    if not parts:
+        handlers.bot.send_message(
+            message.chat.id,
+            "Usage: <code>/admin &lt;user_id&gt;</code> to add, "
+            "<code>/admin remove &lt;user_id&gt;</code> to remove, or "
+            "<code>/admin list</code>.",
+        )
+        return
+    if parts[0].lower() == "list" and len(parts) == 1:
+        admins = database.list_assistant_admins()
+        body = "\n".join(f"• <code>{uid}</code>" for uid in admins) or "(none)"
+        handlers.bot.send_message(message.chat.id, "Delegated admins:\n" + body)
+        return
+    remove = parts[0].lower() == "remove"
+    raw_id = parts[1] if remove and len(parts) == 2 else (parts[0] if len(parts) == 1 else "")
+    try:
+        user_id = int(raw_id)
+        if user_id <= 0:
+            raise ValueError
+    except ValueError:
+        handlers.bot.send_message(message.chat.id, "Send a positive numeric Telegram user ID.")
+        return
+    if remove and security.is_owner(user_id):
+        handlers.bot.send_message(message.chat.id, "The primary owner cannot be removed as a delegated admin.")
+        return
+    changed = (database.remove_assistant_admin(user_id) if remove
+               else database.add_assistant_admin(user_id))
+    verb = "removed" if remove else "added"
+    if not changed:
+        handlers.bot.send_message(message.chat.id, f"Admin <code>{user_id}</code> was not {verb}.")
+        return
+    handlers.bot.send_message(
+        message.chat.id,
+        f"✅ Admin <code>{user_id}</code> {verb}. They must connect their own "
+        "Telegram Business account before managing its assistant.",
+    )
 
 
 def _current_mode() -> str:
@@ -261,7 +316,7 @@ def cmd_memory_clear(message) -> None:
 def cmd_pause_chat(message) -> None:
     raw = _args(message)
     if not raw:
-        database.set_owner_pending_input(security.owner_id(), "pause_chat", {}, 10)
+        database.set_owner_pending_input(security.operator_id(), "pause_chat", {}, 10)
         return handlers.bot.send_message(message.chat.id, "Send the customer chat ID to pause, or /cancel.")
     _do_pause(message.chat.id, raw, pause=True)
 
@@ -269,7 +324,7 @@ def cmd_pause_chat(message) -> None:
 def cmd_resume_chat(message) -> None:
     raw = _args(message)
     if not raw:
-        database.set_owner_pending_input(security.owner_id(), "resume_chat", {}, 10)
+        database.set_owner_pending_input(security.operator_id(), "resume_chat", {}, 10)
         return handlers.bot.send_message(message.chat.id, "Send the customer chat ID to resume, or /cancel.")
     _do_pause(message.chat.id, raw, pause=False)
 
@@ -284,7 +339,7 @@ def cmd_reset(message) -> None:
 
 
 def cmd_cancel(message) -> None:
-    database.clear_owner_pending_input(security.owner_id())
+    database.clear_owner_pending_input(security.operator_id())
     handlers.bot.send_message(message.chat.id, "Cancelled. ✖")
 
 
@@ -450,8 +505,8 @@ def on_confirm_callback(call) -> None:
 def _do_reset_transient() -> str:
     cancelled = database.cancel_all_pending_approvals()
     paused = database.clear_all_pauses()
-    if security.owner_id() is not None:
-        database.clear_owner_pending_input(security.owner_id())
+    if security.operator_id() is not None:
+        database.clear_owner_pending_input(security.operator_id())
     from services import batching
     batching.batcher.reset()
     return f"Reset done: {cancelled} approval(s) cancelled, {paused} pause(s) cleared."
@@ -473,7 +528,7 @@ def _strip(call, new_text: str | None = None) -> None:
 # =============================================================================
 def apply_pending_connect_openai(message, context: dict) -> None:
     """Legacy pending kind (kept for compatibility)."""
-    database.clear_owner_pending_input(security.owner_id())
+    database.clear_owner_pending_input(security.operator_id())
     key = (getattr(message, "text", "") or "").strip()
     _do_connect_key(message.chat.id, key, message_id=message.message_id)
 
@@ -484,7 +539,7 @@ def _do_connect_key(chat_id: int, key: str, message_id: int | None = None) -> No
 
 
 def apply_pending_pause(message, kind: str, context: dict) -> None:
-    database.clear_owner_pending_input(security.owner_id())
+    database.clear_owner_pending_input(security.operator_id())
     raw = (getattr(message, "text", "") or "").strip()
     _do_pause(message.chat.id, raw, pause=(kind == "pause_chat"))
 
@@ -493,7 +548,7 @@ def apply_pending_pause(message, kind: str, context: dict) -> None:
 # Fallback (registered last)
 # =============================================================================
 def on_fallback(message) -> None:
-    if security.is_owner_msg(message):
+    if security.is_operator_msg(message):
         handlers.bot.send_message(message.chat.id,
                                   "I didn't recognise that. Use /start for the control panel "
                                   "or /help for commands.")

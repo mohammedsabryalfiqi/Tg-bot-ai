@@ -225,11 +225,14 @@ def key_env_names(provider_id: str) -> list[str]:
 def resolve_api_key(provider_id: str | None = None) -> str | None:
     """Active key: environment/.env first, then the encrypted DB copy."""
     provider_id = (provider_id or active_provider_id()).strip().lower()
+    row = _db_key_row(provider_id)
+    # Delegated accounts never inherit the primary owner's environment secrets.
+    if database.tenant_id():
+        return _unprotect(row["encrypted_key_or_plain_local_key"]) if row is not None else None
     for name in key_env_names(provider_id):
         value = (os.environ.get(name) or "").strip()
         if value:
             return value
-    row = _db_key_row(provider_id)
     if row is not None:
         return _unprotect(row["encrypted_key_or_plain_local_key"])
     return None
@@ -238,9 +241,10 @@ def resolve_api_key(provider_id: str | None = None) -> str | None:
 def key_source(provider_id: str | None = None) -> str:
     """'env' | 'db' | 'none' — used by the /ai screen to explain what is in use."""
     provider_id = (provider_id or active_provider_id()).strip().lower()
-    for name in key_env_names(provider_id):
-        if (os.environ.get(name) or "").strip():
-            return "env"
+    if not database.tenant_id():
+        for name in key_env_names(provider_id):
+            if (os.environ.get(name) or "").strip():
+                return "env"
     if _db_key_row(provider_id) is not None:
         return "db"
     return "none"

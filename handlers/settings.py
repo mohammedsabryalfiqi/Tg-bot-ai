@@ -78,6 +78,10 @@ SETTINGS = [
     {"key": "disclose_ai", "group": "persona", "label": "May say it is an AI", "type": "bool"},
     {"key": "custom_instructions", "group": "persona", "label": "Extra instructions",
      "type": "text", "hint": "Always added to the AI prompt (also via /instructions)."},
+    {"key": "reply_priorities", "group": "persona", "label": "Reply priorities",
+     "type": "text", "hint": "Ordered priorities for replies, one per line (e.g. answer accurately, then be concise)."},
+    {"key": "never_reply_rules", "group": "persona", "label": "When not to answer",
+     "type": "text", "hint": "Topics or situations to avoid; the assistant will ask a human to follow up."},
 
     # --- AI model -------------------------------------------------------------
     {"key": "temperature", "group": "ai", "label": "Temperature", "type": "float",
@@ -256,7 +260,7 @@ def on_settings_callback(call) -> None:
         key = parts[2]
         spec = _BY_KEY[key]
         kind = {"int": "set_int", "float": "set_float"}.get(spec["type"], "set_text")
-        database.set_owner_pending_input(security.owner_id(), kind, {"key": key}, 10)
+        database.set_owner_pending_input(security.operator_id(), kind, {"key": key}, 10)
         hint = spec.get("hint", "")
         rng = ""
         if "min" in spec and "max" in spec:
@@ -287,7 +291,7 @@ def _back(call, spec, status: str) -> None:
 # Pending-input application (numbers & free text)
 # =============================================================================
 def apply_pending(message, kind: str, context: dict) -> None:
-    owner = security.owner_id()
+    owner = security.operator_id()
     database.clear_owner_pending_input(owner)
     key = context.get("key")
     spec = _BY_KEY.get(key)

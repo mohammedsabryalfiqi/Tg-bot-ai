@@ -33,6 +33,12 @@ def init(uploads_dir) -> None:
 def _dir() -> Path:
     if _uploads_dir is None:
         raise RuntimeError("file_service not initialised; call init(uploads_dir).")
+    import database
+    tenant = database.tenant_id()
+    if tenant:
+        tenant_dir = _uploads_dir / f"tenant-{tenant}"
+        tenant_dir.mkdir(parents=True, exist_ok=True)
+        return tenant_dir
     return _uploads_dir
 
 

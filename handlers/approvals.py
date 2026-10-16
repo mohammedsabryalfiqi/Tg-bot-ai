@@ -36,15 +36,15 @@ def register(bot, cfg) -> None:
     # commands still reach their own handlers.
     @bot.message_handler(
         func=lambda m: (
-            security.is_owner_msg(m)
-            and database.has_owner_pending_input(m.from_user.id)
+            security.is_operator_msg(m)
+            and security.has_pending_operator_input(m)
             and not (getattr(m, "text", "") or "").startswith("/")
         ),
         content_types=["text", "document", "photo"],
     )
     def _on_owner_pending_input(message):
         try:
-            on_owner_pending_input(message)
+            security.run_as_operator(message, lambda: on_owner_pending_input(message))
         except Exception:
             log.exception("pending-input handler failed")
 
@@ -176,7 +176,7 @@ def _do_pause(call, appr) -> None:
 
 def _start_edit(call, appr) -> None:
     bot = handlers.bot
-    database.set_owner_pending_input(security.owner_id(), "edit_approval",
+    database.set_owner_pending_input(security.operator_id(), "edit_approval",
                                      {"approval_id": appr["id"]}, EDIT_TTL_MINUTES)
     telegram_api.answer_callback(bot, call.id, "Send me the edited reply text.")
     handlers.notify_owner(
@@ -190,7 +190,7 @@ def _start_edit(call, appr) -> None:
 # Edit-flow application (called by the pending-input catcher)
 # =============================================================================
 def _apply_edit(message, context: dict) -> None:
-    owner = security.owner_id()
+    owner = security.operator_id()
     database.clear_owner_pending_input(owner)  # one-shot, clear first
     aid = context.get("approval_id")
     appr = database.get_approval(aid) if aid is not None else None
@@ -318,7 +318,7 @@ def _strip_buttons(call) -> None:
 # Owner pending-input router (single catcher for all owner input states)
 # =============================================================================
 def on_owner_pending_input(message) -> None:
-    owner = security.owner_id()
+    owner = security.operator_id()
     state = database.get_owner_pending_input(owner)
     if state is None:
         return
