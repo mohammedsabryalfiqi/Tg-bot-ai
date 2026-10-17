@@ -588,7 +588,7 @@ def seed_default_settings() -> None:
     shared_model_defaults = {}
     if tenant:
         # The primary admin chooses the provider/model; delegated accounts use
-        # that approved model by default but keep their own API key and content.
+        # that approved model and shared key at runtime, but keep separate content.
         with tenant_scope(0):
             shared_model_defaults = {
                 key: get_setting(key)
@@ -1720,6 +1720,22 @@ def create_paid_message(customer_chat_id: int, user_id: int | None, payload: str
              status, utils.now_iso()),
         )
         return int(cur.lastrowid)
+
+
+def reserve_free_message(customer_chat_id: int, user_id: int, payload: str,
+                         text: str, quota: int) -> bool:
+    """Atomically spend one free use; concurrent updates cannot exceed quota."""
+    with write_tx() as cur:
+        cur.execute(
+            "INSERT INTO paid_messages(tenant_id, customer_chat_id, user_id, payload, "
+            "stars, message_text, status, created_at) "
+            "SELECT ?,?,?,?,0,?,'free',? WHERE (SELECT COUNT(*) FROM paid_messages "
+            "WHERE tenant_id=? AND customer_chat_id=? AND stars=0 "
+            "AND status IN ('free','paid')) < ?",
+            (tenant_id(), customer_chat_id, user_id, payload, text, utils.now_iso(),
+             tenant_id(), customer_chat_id, max(0, quota)),
+        )
+        return cur.rowcount > 0
 
 
 def get_paid_message(message_id: int):

@@ -675,9 +675,13 @@ def test_a_paid_message_is_not_answered_when_the_invoice_fails(wired_owned, monk
 
     wired_owned.bot.process_new_updates([_direct_message("عايز أطلب")])
 
-    # Telegram refused the invoice: the gate must not swallow the message.
-    assert "تمام 👌" in wired_owned.rec.texts(4242)
-    assert wired_owned.db.count_paid_messages(status="pending") == 0
+    # Telegram refused the invoice: NEVER answer or forward without payment.
+    assert "تمام 👌" not in wired_owned.rec.texts(4242)
+    assert wired_owned.db.count_paid_messages(status="pending") == 1
+    assert wired_owned.db.count_messages(direction="in") == 0
+    assert not wired_owned.rec.texts(OWNER_ID)
+    retry = wired_owned.rec.messages[0][2]["reply_markup"]
+    assert retry.keyboard[0][0].callback_data.startswith("pay:buy:pm:")
 
 
 def test_gate_and_rules_owner_screens_render(wired_owned):
@@ -896,3 +900,81 @@ def test_every_new_owner_callback_runs_without_swallowing_an_error(wired_owned, 
     problems = [record.getMessage() for record in caplog.records
                 if record.levelno >= logging.ERROR]
     assert problems == []
+
+
+def test_visitor_start_shows_join_buttons_before_messaging(wired_owned, monkeypatch):
+    wired_owned.db.set_setting("require_subscription_enabled", True)
+    from services import gate_service
+    gate_service.add_channel("mychannel", title="My channel")
+    monkeypatch.setattr("telegram_api.get_chat_member", lambda *a: {"status": "left"})
+    wired_owned.bot.process_new_updates([_dm("/start", user_id=4242, update_id=900)])
+    markup = _customer_kwargs(wired_owned.rec, 4242)[0]["reply_markup"]
+    assert markup.keyboard[0][0].url == "https://t.me/mychannel"
+    assert markup.keyboard[-1][0].callback_data == "gate:verify"
+    assert wired_owned.db.count_messages(direction="in") == 0
+
+
+def test_missing_stars_price_never_allows_an_answer(wired_owned, monkeypatch):
+    _rules_env(wired_owned, monkeypatch)
+    wired_owned.db.set_setting("paid_messages_enabled", True)
+    wired_owned.db.set_setting("paid_message_stars", 0)
+    wired_owned.bot.process_new_updates([_direct_message("hello", update_id=901)])
+    assert "تمام 👌" not in wired_owned.rec.texts(4242)
+    assert wired_owned.db.count_messages(direction="in") == 0
+    assert any("price is not configured" in text for text in wired_owned.rec.texts(4242))
+
+
+def test_media_does_not_bypass_paid_message_gate(wired_owned, monkeypatch):
+    _rules_env(wired_owned, monkeypatch)
+    wired_owned.db.set_setting("paid_messages_enabled", True)
+    wired_owned.db.set_setting("paid_message_stars", 25)
+    wired_owned.db.set_setting("nontext_ack_message", "acknowledged")
+    wired_owned.bot.process_new_updates([_update({
+        "update_id": 902,
+        "message": {
+            "message_id": 902, "date": 0,
+            "chat": {"id": 4242, "type": "private"},
+            "from": {"id": 4242, "is_bot": False, "first_name": "Mona"},
+            "voice": {"file_id": "voice-id", "file_unique_id": "unique", "duration": 1},
+        },
+    })])
+    assert "acknowledged" not in wired_owned.rec.texts(4242)
+    assert wired_owned.db.count_messages(direction="in") == 0
+    assert any("Send your message as text" in text for text in wired_owned.rec.texts(4242))
+
+
+def test_two_linked_admins_use_owner_key_but_separate_personal_prompts(wired_owned, monkeypatch):
+    from services import ai_service
+    wired_owned.db.set_setting("ai_provider", "openai")
+    ai_service.store_api_key("central-secret", "openai")
+    wired_owned.db.set_setting("custom_instructions", "OWNER-PRIVATE")
+    for uid in (501, 502):
+        wired_owned.db.add_assistant_admin(uid)
+        wired_owned.db.upsert_business_connection(f"linked-{uid}", uid, True, True)
+        with database.tenant_scope(uid):
+            database.set_setting("auto_reply_enabled", True)
+            database.set_setting("approval_mode_enabled", False)
+            database.set_setting("reply_debounce_seconds", 0.0)
+            database.set_setting("custom_instructions", f"PRIVATE-{uid}")
+    calls = []
+
+    def fake_post(url, headers=None, json=None, **kwargs):
+        calls.append((headers, json))
+        return SimpleNamespace(status_code=200, json=lambda: {
+            "choices": [{"message": {"content": "أهلاً"}}]})
+
+    monkeypatch.setattr(ai_service.requests, "post", fake_post)
+    for uid in (501, 502):
+        wired_owned.bot.process_new_updates([_business_message(
+            "Hello", bcid=f"linked-{uid}", chat_id=4242, user_id=4242, message_id=uid)])
+    assert len(calls) == 2
+    for uid, (headers, payload) in zip((501, 502), calls):
+        assert headers["Authorization"] == "Bearer central-secret"
+        prompt = payload["messages"][0]["content"]
+        assert f"PRIVATE-{uid}" in prompt
+        assert f"PRIVATE-{1003 - uid}" not in prompt
+        assert "OWNER-PRIVATE" not in prompt
+        assert "private personal messages" in prompt
+        with database.tenant_scope(uid):
+            assert database.get_api_key_row("openai") is None
+            assert database.count_messages(direction="out") == 1

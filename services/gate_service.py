@@ -45,8 +45,7 @@ def _now() -> str:
 # Subscription gate
 # =============================================================================
 def subscription_enabled() -> bool:
-    return bool(database.get_bool("require_subscription_enabled")
-                and database.count_required_channels())
+    return database.get_bool("require_subscription_enabled")
 
 
 def channels() -> list:
@@ -67,7 +66,9 @@ def add_channel(chat_ref: str, *, title: str = "", invite_link: str = "",
     if not link and ref.startswith("@"):
         link = f"https://t.me/{ref.lstrip('@')}"
     guessed = kind or ("group" if "joinchat" in link or "+" in link else "channel")
-    return database.add_required_channel(ref, title=title, invite_link=link, kind=guessed)
+    channel_id = database.add_required_channel(ref, title=title, invite_link=link, kind=guessed)
+    database.clear_gate_checks()
+    return channel_id
 
 
 def remove_channel(channel_id: int) -> bool:
@@ -131,12 +132,13 @@ def _is_member(chat_ref: str, user_id: int) -> bool:
         info = telegram_api.get_chat_member(chat_ref, user_id)
     except Exception:
         log.debug("getChatMember blew up for %s", chat_ref, exc_info=True)
-        return True                            # unknown => never block
+        return False                           # unverified => keep gate closed
     if not info:
-        # Unknown (no permission, private invite, network): never block a real
-        # person because the *bot* could not check.
-        return True
-    return str(info.get("status", "")).lower() in _MEMBER_STATUSES
+        return False
+    status = str(info.get("status", "")).lower()
+    if status == "restricted":
+        return bool(info.get("is_member", False))
+    return status in _MEMBER_STATUSES
 
 
 def missing_channels(user_id: int, *, force: bool = False) -> list:
@@ -170,7 +172,7 @@ def was_verified_before(user_id: int) -> bool:
 def subscription_ok(user_id: int) -> bool:
     if not subscription_enabled():
         return True
-    return not missing_channels(user_id)
+    return bool(channels()) and not missing_channels(user_id)
 
 
 # =============================================================================
@@ -185,13 +187,8 @@ def stars_price() -> int:
 
 
 def payments_enabled() -> bool:
-    """True when the admin switched the gate on *and* typed a price."""
-    if not database.get_bool("paid_messages_enabled"):
-        return False
-    if stars_price() <= 0:
-        log.info("paid messages are enabled but no star price is set — gate stays open")
-        return False
-    return True
+    """The enabled switch is authoritative, even during incomplete setup."""
+    return database.get_bool("paid_messages_enabled")
 
 
 def free_quota() -> int:
@@ -233,10 +230,11 @@ def park_message(user_id: int, chat_id: int, text: str, *, stars: int | None = N
     """Store the message until the payment lands (or record a free use)."""
     payload = new_payload(user_id)
     amount = 0 if free else int(stars if stars is not None else stars_price())
-    database.create_paid_message(
-        chat_id, user_id, payload, amount, text,
-        status="pending" if not free else "free",
-    )
+    if free:
+        if not database.reserve_free_message(chat_id, user_id, payload, text, free_quota()):
+            return None
+    else:
+        database.create_paid_message(chat_id, user_id, payload, amount, text, status="pending")
     row = database.get_paid_message_by_payload(payload)
     if free:
         log.info("free message %s/%s used by chat=%s", free_quota(), free_quota(),
@@ -249,7 +247,8 @@ def confirm_payment(payload: str, charge_id: str = "") -> dict | None:
     row = database.get_paid_message_by_payload(payload)
     if row is None or row["status"] not in ("pending",):
         return None
-    database.mark_paid_message_paid(payload, charge_id)
+    if not database.mark_paid_message_paid(payload, charge_id):
+        return None
     fresh = database.get_paid_message_by_payload(payload)
     log.info("stars payment confirmed (%s stars, chat=%s)",
              row["stars"], utils.mask_id(row["customer_chat_id"]))

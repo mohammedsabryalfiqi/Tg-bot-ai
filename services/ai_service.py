@@ -108,7 +108,7 @@ def _unprotect(stored: str | None) -> str | None:
 # =============================================================================
 def _db_setting(key: str, default=""):
     try:
-        if database.tenant_id() and key in {"ai_provider", "ai_model_by_provider", "ai_base_url"}:
+        if database.tenant_id() and key in {"ai_provider", "ai_model_by_provider", "ai_base_url", "openai_model"}:
             # Model/provider choice is centrally controlled by the fixed primary
             # admin and propagates to every delegated account immediately.
             with database.tenant_scope(0):
@@ -232,8 +232,13 @@ def resolve_api_key(provider_id: str | None = None) -> str | None:
     """Active key: environment/.env first, then the encrypted DB copy."""
     provider_id = (provider_id or active_provider_id()).strip().lower()
     row = _db_key_row(provider_id)
-    # Delegated accounts never inherit the primary owner's environment secrets.
+    # Resolve centrally at request time: rotations immediately reach all linked
+    # accounts, without copying secrets into their databases or backups.
     if database.tenant_id():
+        with database.tenant_scope(0):
+            shared = resolve_api_key(provider_id)
+        if shared:
+            return shared
         return _unprotect(row["encrypted_key_or_plain_local_key"]) if row is not None else None
     for name in key_env_names(provider_id):
         value = (os.environ.get(name) or "").strip()
@@ -245,8 +250,12 @@ def resolve_api_key(provider_id: str | None = None) -> str | None:
 
 
 def key_source(provider_id: str | None = None) -> str:
-    """'env' | 'db' | 'none' — used by the /ai screen to explain what is in use."""
+    """'env' | 'db' | 'shared' | 'none' — the source shown in the /ai screen."""
     provider_id = (provider_id or active_provider_id()).strip().lower()
+    if database.tenant_id():
+        with database.tenant_scope(0):
+            if resolve_api_key(provider_id):
+                return "shared"
     if not database.tenant_id():
         for name in key_env_names(provider_id):
             if (os.environ.get(name) or "").strip():
@@ -300,6 +309,8 @@ def active_model_label() -> str:
 
 
 def masked_active_key(provider_id: str | None = None) -> str:
+    if key_source(provider_id) == "shared":
+        return i18n.t("ai.key_source.shared")
     key = resolve_api_key(provider_id)
     return utils.mask_key(key) if key else "<not set>"
 
@@ -330,7 +341,7 @@ def store_api_key(api_key: str, provider_id: str | None = None, *, persist_env: 
     provider_id = (provider_id or active_provider_id()).strip().lower()
     api_key = _clean_key(api_key)
     env_names = key_env_names(provider_id)
-    if env_names and persist_env:
+    if env_names and persist_env and not database.tenant_id():
         os.environ[env_names[0]] = api_key
     database.upsert_api_key(provider_id, utils.mask_key(api_key), _protect(api_key))
     log.info("API key stored for provider %s (%s)", provider_id, utils.mask_key(api_key))
@@ -338,8 +349,9 @@ def store_api_key(api_key: str, provider_id: str | None = None, *, persist_env: 
 
 def disconnect_api_key(provider_id: str | None = None) -> None:
     provider_id = (provider_id or active_provider_id()).strip().lower()
-    for name in key_env_names(provider_id):
-        os.environ.pop(name, None)
+    if not database.tenant_id():
+        for name in key_env_names(provider_id):
+            os.environ.pop(name, None)
     database.delete_api_key(provider_id)
     log.info("API key removed for provider %s", provider_id)
 
@@ -1100,6 +1112,7 @@ def status_lines() -> list[str]:
         source = key_source(provider.id)
         origin = {"env": i18n.t("ai.status.from_env"),
                   "db": i18n.t("ai.status.in_telegram"),
+                  "shared": i18n.t("ai.key_source.shared"),
                   "none": ""}[source]
         lines.append(i18n.t("ai.status.api_key",
                             masked=masked_active_key(provider.id), origin=origin))

@@ -6,6 +6,16 @@ Chunk A: security notices, keyboards, owner commands, owner tools.
 from __future__ import annotations
 
 STRINGS: dict[str, str] = {
+    'gate.user.start': '👋 Send your message here to talk to the personal assistant.',
+    'gate.user.start_paid': '⭐ Each message costs {stars} Stars. You have {free} free messages left. Send your text to receive an invoice; after the free allowance, replies require payment.',
+
+    "gate.user.payment_unavailable": '⚠️ Paid messages are enabled but the price is not configured. Please try later.',
+    'ai.key_source.shared': 'Shared owner key',
+    'kbd.gate.sub_toggle': '🔒 Turn forced subscription on/off',
+    'gate.user.unavailable': '⚠️ Messaging is temporarily blocked while the subscription gate is configured. Please try later.',
+    'gate.user.text_required': '⭐ Payment is required. Send your message as text to receive a Stars invoice.',
+    'gate.sub.bad': 'Send @username or a public https://t.me/channel link. For a private channel: -1001234567890 | Channel title | https://t.me/+invite',
+
     # =========================================================================
     # security.py — notices, claim flow, guards
     # =========================================================================
@@ -617,8 +627,8 @@ STRINGS: dict[str, str] = {
     "set.opt.public_direct_bot_chat_enabled": "Direct-DM notice",
     "set.opt.assistant_name": "Assistant name",
     "set.opt.assistant_name.hint": "How the assistant refers to itself, e.g. “Sara”.",
-    "set.opt.business_name": "Business name",
-    "set.opt.business_description": "What the business does",
+    "set.opt.business_name": "Account holder name",
+    "set.opt.business_description": "About the account holder",
     "set.opt.business_description.hint": "One or two sentences the AI uses as context.",
     "set.opt.tone": "Tone",
     "set.opt.reply_language": "Reply language",
@@ -958,7 +968,7 @@ STRINGS: dict[str, str] = {
         "Providers with 🆓 offer a usable free tier; 💻 runs on your own computer."
     ),
     "ai.delegate_note": (
-        "The primary admin chooses the provider/model; this account manages its own key."
+        "The primary admin chooses the provider/model. The owner key is shared for replies; personal data stays separate."
     ),
     "ai.freeai_hint": (
         "💡 No credit card / no balance? Send /freeai for the providers "
@@ -1334,7 +1344,7 @@ STRINGS: dict[str, str] = {
     "gate.sub.empty": "No channels yet.",
     "gate.sub.add_hint": "Current state: <b>{state}</b>",
     "gate.sub.ask": (
-        "Send the channel/group as <code>@username</code> or its numeric id, or "
+        "Send a public channel link, <code>@username</code>, or "
         "<code>@username | Title | invite-link</code>. The bot must be an admin "
         "there to check membership."
     ),
@@ -1355,7 +1365,7 @@ STRINGS: dict[str, str] = {
     "gate.stars.price": "Price per message: <b>{stars}</b> stars",
     "gate.stars.free": "Free messages before paying: <b>{count}</b>",
     "gate.stars.earned": "Paid messages: <b>{count}</b> · stars earned: <b>{stars}</b>",
-    "gate.stars.need_price": "⚠️ Type a price above 0 — until then the gate stays open.",
+    "gate.stars.need_price": "⚠️ Set a price above 0 — paid messages stay blocked until it is configured.",
     "gate.stars.hint": (
         "Tap a value to change it, or open /settings → Grounding for the same "
         "switches."
@@ -1432,13 +1442,13 @@ STRINGS: dict[str, str] = {
     ),
     "set.opt.paid_messages_enabled": "Charge stars for messages",
     "set.opt.paid_messages_enabled.hint": (
-        "Each message costs the price below. Set the price to 0 to keep the gate "
+        "Each message costs the price below. Switch paid messages off to keep the gate "
         "open. Applies to private messages only."
     ),
     "set.opt.paid_message_stars": "Price per message (stars)",
     "set.opt.paid_message_stars.hint": (
         "The number of Telegram Stars a person pays before their message reaches "
-        "you. Nothing is charged while it is 0."
+        "you. A positive price is required while paid messages are enabled."
     ),
     "set.opt.paid_message_free_count": "Free messages before paying",
     "set.opt.gate_copy_to_owner": "Send me a copy of gated messages",

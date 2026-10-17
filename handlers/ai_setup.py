@@ -139,8 +139,9 @@ def _provider_detail_text(provider: providers.Provider) -> str:
         lines.append(i18n.t("ai.get_key", url=utils.escape(provider.key_url)))
     source = ai_service.key_source(provider.id)
     if source != "none":
-        origin = i18n.t("ai.key_source.env") if source == "env" \
-            else i18n.t("ai.key_source.telegram")
+        origin = (i18n.t("ai.key_source.shared") if source == "shared" else
+                  i18n.t("ai.key_source.env") if source == "env" else
+                  i18n.t("ai.key_source.telegram"))
         lines.append("")
         lines.append(i18n.t("ai.current_key",
                             masked=utils.escape(ai_service.masked_active_key(provider.id)),

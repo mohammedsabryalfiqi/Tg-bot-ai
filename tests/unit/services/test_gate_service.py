@@ -1,9 +1,7 @@
 """Tests for services/gate_service.py — the two entry gates.
 
-Both gates are admin switches that ship OFF, and both must fail *open*: a
-permission-less bot, a stale cache, a missing price or an unknown membership
-answer must never lock a real person out of the assistant. Those rules are what
-this module pins.
+Gates ship OFF. Once enabled they fail closed: an unknown membership answer,
+missing price or invoice failure must never authorize a reply.
 """
 
 from __future__ import annotations
@@ -45,19 +43,19 @@ def test_joined_users_pass_and_missing_users_are_reported(db, monkeypatch):
     assert [row["chat_ref"] for row in gate_service.missing_channels(5002)] == ["@required"]
 
 
-def test_an_unknown_membership_answer_never_blocks_a_person(db, monkeypatch):
-    """A bot without permission to read members must not lock everyone out."""
+def test_an_unknown_membership_answer_blocks_until_verified(db, monkeypatch):
+    """Missing bot permissions must not count as a successful membership check."""
     db.add_required_channel("@private_channel")
     db.set_setting("require_subscription_enabled", True)
     _fake_member(monkeypatch, {})                 # every lookup answers "unknown"
-    assert gate_service.missing_channels(5001) == []
+    assert len(gate_service.missing_channels(5001)) == 1
 
     def broken(chat_ref, user_id):
         raise RuntimeError("network down")
 
     monkeypatch.setattr("services.gate_service.telegram_api.get_chat_member", broken)
     db.clear_gate_checks()
-    assert gate_service.missing_channels(5001) == []
+    assert len(gate_service.missing_channels(5001)) == 1
 
 
 def test_the_membership_answer_is_cached(db, monkeypatch):
@@ -102,11 +100,11 @@ def test_join_rows_skip_channels_without_a_link(db):
 
 
 # --- stars gate ---------------------------------------------------------------
-def test_payments_need_both_the_switch_and_a_price(db):
+def test_enabled_payments_without_a_price_do_not_open_the_gate(db):
     db.set_setting("paid_messages_enabled", True)
     db.set_setting("paid_message_stars", 0)
-    assert gate_service.payments_enabled() is False   # price 0 => gate open
-    assert gate_service.payment_required(5001) is False
+    assert gate_service.payments_enabled() is True   # incomplete setup stays closed
+    assert gate_service.payment_required(5001) is True
 
     db.set_setting("paid_message_stars", 50)
     assert gate_service.payments_enabled() is True
@@ -168,7 +166,7 @@ def test_summary_reports_both_gates(db):
 
     data = gate_service.summary()
     assert data["subscription_on"] is True and data["channels"] == 1
-    assert data["payments_on"] is False           # no price typed yet
+    assert data["payments_on"] is True            # switch remains on during setup
     assert gate_service.summary_lines()
 
 
@@ -178,3 +176,35 @@ def test_the_last_free_message_warns_about_the_price(db):
     db.set_setting("paid_message_free_count", 1)
     notice = gate_service.free_last_notice()
     assert "40" in notice and "last free" in notice
+
+
+def test_enabled_subscription_without_channels_stays_closed(db):
+    db.set_setting("require_subscription_enabled", True)
+    assert gate_service.subscription_enabled()
+    assert not gate_service.subscription_ok(5001)
+
+
+def test_restricted_members_need_the_is_member_flag(db, monkeypatch):
+    db.add_required_channel("@required")
+    db.set_setting("require_subscription_enabled", True)
+    for member in (False, True):
+        monkeypatch.setattr("telegram_api.get_chat_member", lambda *a: {
+            "status": "restricted", "is_member": member})
+        assert gate_service.subscription_ok(5001) is member
+        db.clear_gate_checks()
+
+
+def test_adding_a_channel_invalidates_existing_verification(db, monkeypatch):
+    gate_service.add_channel("first")
+    db.set_setting("require_subscription_enabled", True)
+    _fake_member(monkeypatch, {("@first", 5001): "member"})
+    assert gate_service.subscription_ok(5001)
+    gate_service.add_channel("second")
+    assert [r["chat_ref"] for r in gate_service.missing_channels(5001)] == ["@second"]
+
+
+def test_free_quota_cannot_be_reserved_twice(db):
+    db.set_setting("paid_message_free_count", 1)
+    assert gate_service.park_message(5001, 5001, "first", free=True)
+    assert gate_service.park_message(5001, 5001, "second", free=True) is None
+    assert db.count_free_messages_used(5001) == 1

@@ -136,6 +136,19 @@ def _process_scoped(message) -> None:
         if caption and database.get_bool("process_nontext_enabled"):
             text = caption
     if not text:
+        # Media must not bypass entry gates (a paid media-only message is not
+        # supported by the text invoice pipeline).
+        if gate_service.subscription_enabled():
+            if not gate_service.channels():
+                handlers.bot.send_message(chat_id, i18n.t("gate.user.unavailable"))
+                return
+            missing = gate_service.missing_channels(sender_id)
+            if missing:
+                _ask_to_subscribe(chat_id, missing)
+                return
+        if gate_service.payments_enabled():
+            handlers.bot.send_message(chat_id, i18n.t("gate.user.text_required"))
+            return
         _handle_non_text(conn, message)
         return
 
@@ -229,10 +242,14 @@ def _entry_gates(bcid: str, chat_id: int, user_id, message, text: str):
     describing the gate that let the message through (used for the owner copy).
     """
     if not user_id:
-        return None
+        return False if (gate_service.subscription_enabled()
+                         or gate_service.payments_enabled()) else None
 
     subscription_fresh = False
     if gate_service.subscription_enabled():
+        if not gate_service.channels():
+            handlers.bot.send_message(chat_id, i18n.t("gate.user.unavailable"))
+            return False
         verified = gate_service.was_verified_before(user_id)
         missing = gate_service.missing_channels(user_id)
         if missing:
@@ -242,28 +259,23 @@ def _entry_gates(bcid: str, chat_id: int, user_id, message, text: str):
         # it is the one the owner gets a copy of.
         subscription_fresh = not verified
 
-    if gate_service.payment_required(user_id):
-        if not gate_handler.request_payment(chat_id, user_id, text):
-            # The invoice could not be created (no price? Telegram refused):
-            # never lock a real person out — answer normally.
-            log.warning("could not ask chat=%s for the star payment",
-                        utils.mask_id(chat_id))
-            return None
-        return False
-
     if gate_service.payments_enabled():
-        left = gate_service.free_left(user_id)
-        if left > 0:
-            gate_service.park_message(user_id, chat_id, text, free=True)
-            if left == 1:
-                # Last free message: say so once, so the next invoice is no
-                # surprise. Best effort — never block the reply.
+        free = gate_service.park_message(user_id, chat_id, text, free=True)
+        if free is not None:
+            left = gate_service.free_left(user_id)
+            if left == 0:
                 try:
                     handlers.bot.send_message(chat_id, gate_service.free_last_notice())
                 except Exception:
                     log.debug("could not send the last-free-message notice", exc_info=True)
-            return {"kind": "free", "stars": 0, "left": left - 1}
-        return None
+            return {"kind": "free", "stars": 0, "left": left}
+        # An enabled gate without a valid price is closed, not free.
+        if gate_service.stars_price() <= 0:
+            handlers.bot.send_message(chat_id, i18n.t("gate.user.payment_unavailable"))
+            return False
+        if not gate_handler.request_payment(chat_id, user_id, text):
+            log.warning("could not ask chat=%s for the star payment", utils.mask_id(chat_id))
+        return False
 
     if subscription_fresh:
         return {"kind": "subscription", "stars": 0}

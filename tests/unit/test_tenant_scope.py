@@ -61,15 +61,40 @@ def test_admin_inherits_primary_selected_model_but_not_content(db):
         assert database.get_str("business_name") == ""
 
 
-def test_admin_does_not_inherit_primary_environment_api_key(db, monkeypatch):
+def test_admin_uses_shared_environment_key_without_copying_it(db, monkeypatch):
     from services import ai_service
     database.add_assistant_admin(501)
     monkeypatch.setenv("OPENAI_API_KEY", "primary-env-secret")
-    assert ai_service.resolve_api_key("openai") == "primary-env-secret"
     with database.tenant_scope(501):
-        assert ai_service.resolve_api_key("openai") is None
-        database.upsert_api_key("openai", "tenant-mask", "tenant-secret")
-        assert ai_service.resolve_api_key("openai") == "tenant-secret"
+        assert ai_service.resolve_api_key("openai") == "primary-env-secret"
+        assert ai_service.key_source("openai") == "shared"
+        assert database.get_api_key_row("openai") is None
+        assert "secret" not in ai_service.masked_active_key("openai")
+        assert ai_service.status_lines()
+        # An administrator must not be able to disconnect everyone's env key.
+        ai_service.disconnect_api_key("openai")
+        assert ai_service.resolve_api_key("openai") == "primary-env-secret"
+
+
+def test_shared_database_key_rotates_immediately_and_keeps_content_private(db):
+    from services import ai_service
+    database.set_setting("ai_provider", "openai")
+    ai_service.store_api_key("central-first", "openai")
+    with database.tenant_scope(501):
+        ai_service.store_api_key("local-key", "openai", persist_env=True)
+        database.set_setting("custom_instructions", "Private to 501")
+        assert ai_service.resolve_api_key() == "central-first"
+        assert ai_service.is_ready()
+    ai_service.store_api_key("central-rotated", "openai")
+    with database.tenant_scope(501):
+        assert ai_service.resolve_api_key() == "central-rotated"
+        assert database.get_api_key_row("openai")["encrypted_key_or_plain_local_key"] == "plain:local-key"
+    with database.tenant_scope(502):
+        assert ai_service.resolve_api_key() == "central-rotated"
+        assert database.get_str("custom_instructions") == ""
+    ai_service.disconnect_api_key("openai")
+    with database.tenant_scope(501):
+        assert ai_service.resolve_api_key() == "local-key"
 
 
 def test_priority_and_do_not_answer_fields_are_added_to_prompt(db):

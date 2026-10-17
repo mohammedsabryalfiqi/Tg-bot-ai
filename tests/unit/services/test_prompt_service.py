@@ -169,3 +169,13 @@ def test_tone_fallbacks_to_friendly_for_unknown_values(db):
     db.set_setting("tone", "shouty")  # not a registry value
     messages, _ = ps.build_messages("bc1", 5, "hi")
     assert "Warm, helpful" in messages[0]["content"]
+
+
+def test_both_transports_use_personal_not_commercial_framing(db):
+    for direct in (False, True):
+        messages, _ = ps.build_messages("bc1", 5, "Hello", direct=direct)
+        prompt = messages[0]["content"]
+        assert "private personal messages" in prompt
+        assert "a business account" not in prompt
+        assert "team member of the business" not in prompt
+        assert "account holder" in prompt
