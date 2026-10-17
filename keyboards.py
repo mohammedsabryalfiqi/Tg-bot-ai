@@ -121,7 +121,8 @@ def ai_providers(active_id: str, free_only: bool = False) -> types.InlineKeyboar
     kb = types.InlineKeyboardMarkup(row_width=1)
     shown = _providers.free() if free_only else _providers.ordered()
     for provider in shown:
-        kb.add(_btn(_provider_label(provider, active_id), cb("ai", "provider", provider.id)))
+        kb.add(_btn(_provider_label(provider, active_id), cb("ai", "provider", provider.id),
+                    "success" if provider.id == active_id else "primary"))
     if free_only:
         kb.add(_btn(i18n.t("kbd.ai.show_every"), cb("ai", "providers")))
     else:
@@ -156,7 +157,8 @@ def ai_models(models: list[str], current: str, can_refresh: bool = True,
             data = cb("ai", "model", model)
         except ValueError:
             continue          # Telegram callback data is capped at 64 bytes
-        kb.add(_btn(f"{mark}{model[:58]}", data))
+        kb.add(_btn(f"{mark}{model[:58]}", data,
+                    "success" if model == current else "primary"))
     if can_refresh:
         kb.add(_btn(i18n.t("kbd.ai.load_models"), cb("ai", "models_live")))
     kb.add(_btn(i18n.t("kbd.ai.type_model"), cb("ai", "model_custom")))
@@ -271,7 +273,7 @@ def settings_root(rows: list[dict]) -> types.InlineKeyboardMarkup:
     """rows: list of {"label": str, "callback_data": str}."""
     kb = types.InlineKeyboardMarkup(row_width=1)
     for r in rows:
-        kb.add(_btn(r["label"], r["callback_data"]))
+        kb.add(_btn(r["label"], r["callback_data"], r.get("style", "primary")))
     kb.add(_btn(i18n.t("kbd.close"), cb("set", "close")))
     return kb
 
@@ -285,7 +287,8 @@ def settings_enum(key: str, choices: list[str], current: str,
     for choice in choices:
         mark = "• " if choice == current else ""
         kb.add(_btn(f"{mark}{labels.get(choice, choice)}",
-                    cb("set", "enumval", key, choice)))
+                    cb("set", "enumval", key, choice),
+                    "success" if choice == current else "primary"))
     kb.add(_btn(i18n.t("kbd.back"), cb("set", "root")))
     return kb
 
@@ -335,7 +338,8 @@ def language_menu(current: str) -> types.InlineKeyboardMarkup:
     kb = types.InlineKeyboardMarkup(row_width=1)
     for code, label in i18n.LANGUAGES.items():
         mark = "• " if code == current else ""
-        kb.add(_btn(f"{mark}{label}", cb("set", "enumval", "ui_language", code)))
+        kb.add(_btn(f"{mark}{label}", cb("set", "enumval", "ui_language", code),
+                    "success" if code == current else "primary"))
     return kb
 
 
@@ -371,7 +375,8 @@ def rules_list(rows: list) -> types.InlineKeyboardMarkup:
     for row in rows:
         mark = "✅" if row["enabled"] else "⏸"
         kb.add(_btn(f"{mark} #{row['id']} {(row['topic'] or row['rule'])[:40]}",
-                    cb("rule", "toggle", row["id"])))
+                    cb("rule", "toggle", row["id"]),
+                    "success" if row["enabled"] else "danger"))
     kb.add(_btn(i18n.t("kbd.back"), cb("rule", "root")))
     kb.add(_btn(i18n.t("kbd.close"), cb("rule", "close")))
     return kb
@@ -393,7 +398,8 @@ def resources_list(rows: list) -> types.InlineKeyboardMarkup:
         mark = "✅" if row["enabled"] else "⏸"
         icon = {"telegram": "📣", "link": "🔗", "text": "📄"}.get(row["kind"], "🔗")
         kb.add(_btn(f"{mark} {icon} #{row['id']} {(row['title'] or row['url'])[:34]}",
-                    cb("res", "toggle", row["id"])))
+                    cb("res", "toggle", row["id"]),
+                    "success" if row["enabled"] else "danger"))
     kb.add(_btn(i18n.t("kbd.back"), cb("res", "root")))
     kb.add(_btn(i18n.t("kbd.close"), cb("res", "close")))
     return kb
@@ -428,19 +434,26 @@ def unanswered_card(question_id: int) -> types.InlineKeyboardMarkup:
 
 def gate_menu(stats: dict) -> types.InlineKeyboardMarkup:
     kb = types.InlineKeyboardMarkup(row_width=1)
-    kb.add(_btn(i18n.t("kbd.gate.subscription"), cb("gate", "sub")))
-    kb.add(_btn(i18n.t("kbd.gate.stars"), cb("gate", "stars")))
+    kb.add(_btn(i18n.t("kbd.gate.subscription"), cb("gate", "sub"),
+                "success" if stats["subscription_on"] else "danger"))
+    kb.add(_btn(i18n.t("kbd.gate.stars"), cb("gate", "stars"),
+                "success" if stats["payments_on"] else "danger"))
     kb.add(_btn(i18n.t("kbd.gate.list"), cb("gate", "list")))
     kb.add(_btn(i18n.t("kbd.close"), cb("gate", "close")))
     return kb
 
 
 def required_channels(rows: list) -> types.InlineKeyboardMarkup:
+    import database
+    enabled = database.get_bool("require_subscription_enabled")
     kb = types.InlineKeyboardMarkup(row_width=1)
+    kb.add(_btn(i18n.t("kbd.gate.sub_toggle"), cb("gate", "toggle_sub"),
+                "success" if enabled else "danger"))
     for row in rows:
         mark = "✅" if row["enabled"] else "⏸"
         kb.add(_btn(f"{mark} {row['title'] or row['chat_ref']}",
-                    cb("gate", "toggle_channel", row["id"])))
+                    cb("gate", "toggle_channel", row["id"]),
+                    "success" if row["enabled"] else "danger"))
     kb.add(_btn(i18n.t("kbd.gate.add_channel"), cb("gate", "add_channel")))
     kb.add(_btn(i18n.t("kbd.back"), cb("gate", "root")))
     return kb

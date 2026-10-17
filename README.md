@@ -1,13 +1,29 @@
-# SmarTel — Telegram Business Managed AI Bot
+# SmarTel — Personal Telegram Reply Assistant
 
 **Languages:** English (this file) · [العربية / Arabic](README.ar.md) · [فارسی / Persian](README_FA.md)
 
-SmarTel is a **Telegram Business "managed bot"** AI assistant — the same model as
-ChatPlace's *"AI Agent connected to a Telegram Business account"*. A Telegram
-Business user connects the bot to their own account through Telegram's native
-**Settings → Telegram Business → Chat Bots** screen. From then on the bot receives
-that account's **incoming private customer messages** and answers them **on behalf
-of the account**, from the owner's own content (quick answers + knowledge base).
+SmarTel answers **personal conversations**, not shop/customer-service requests.
+Both direct bot messages and linked-account messages use the account holder's
+personal identity, context and reply preferences. Direct bot replies do not need
+Telegram Business. Replies sent from a linked account still require Telegram's
+official **Settings → Telegram Business → Chat Bots** connection and permissions;
+"Business" here names the transport, not the user's purpose.
+
+The owner's AI key is resolved centrally for all linked administrators, including
+key rotations, without copying it to their databases. Their conversations,
+knowledge and instructions remain isolated. A local key is only a fallback when
+no central key exists; removing it cannot disconnect the central key.
+
+Use `/gate` (also linked from `/settings` → Entry gates) to add required channels,
+toggle subscription, set a Stars price and set the free-message allowance to
+**0** for payment from the first message. Public `https://t.me/channel` links or
+`@channel` are supported; private channels need `-100… | Title | https://t.me/+invite`.
+The bot must be a channel admin to verify membership. Enabled gates **fail closed**:
+unverifiable membership, missing setup and failed invoices do not authorize replies.
+Visitors see joining/pricing on `/start`, then an invoice for their text. Delivery
+requires Telegram's matching payment confirmation. Gates apply to messages sent
+to **the bot itself**, not linked-account conversations. Toggle colors follow
+saved state (green enabled, red disabled) on supported Telegram clients.
 
 It uses **only the official Telegram Bot API business features** — no Telethon /
 Pyrogram userbot, no phone number / login code / 2FA / session string, no scraping.
@@ -289,7 +305,7 @@ once.
 | `unanswered_enabled` | `true` | Say "I'll ask the team" and file the question in `/unanswered` |
 | `require_subscription_enabled` | `false` | **Gate:** everyone must join your channels first (list in `/gate`) |
 | `paid_messages_enabled` | `false` | **Gate:** charge Telegram Stars per message |
-| `paid_message_stars` | `0` | The price you type — **0 means the gate stays open** |
+| `paid_message_stars` | `0` | The price you type — **0 blocks paid messages until a price is configured if enabled** |
 | `paid_message_free_count` | `0` | How many messages a person gets before paying |
 | `gate_copy_to_owner` | `true` | Send you a copy of a message that went through a gate |
 
@@ -376,8 +392,8 @@ knowledge base; the link itself is kept as a reference the assistant may hand ou
 The bot must be an **administrator** in that channel to read membership. People who
 have not joined get a join button per channel plus **✅ Check my subscription**;
 the answer is cached 5 minutes. If the bot *cannot* check (no permission, private
-invite, network error) the message is allowed rather than blocked — a person is
-never locked out because the bot could not look.
+invite, network error), the message stays blocked. Fix the bot permissions and
+retry verification; an unknown result is never proof of membership.
 
 ### Paid messages (Telegram Stars) — `/gate` → ⭐
 1. `/gate` → **⭐ Paid messages** → **💲 Set the price** and type the number of

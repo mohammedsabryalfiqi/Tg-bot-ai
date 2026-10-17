@@ -184,7 +184,14 @@ def _rows_for_group(group: str) -> list[dict]:
             data = keyboards.cb("set", "num", spec["key"])
         else:
             data = keyboards.cb("set", "text", spec["key"])
-        rows.append({"label": label, "callback_data": data})
+        style = ("success" if database.get_bool(spec["key"]) else "danger") \
+            if spec["type"] == "bool" else "primary"
+        rows.append({"label": label, "callback_data": data, "style": style})
+    if group == "gate":
+        rows.extend([
+            {"label": i18n.t("kbd.gate.subscription"), "callback_data": "gate:sub"},
+            {"label": i18n.t("kbd.gate.stars"), "callback_data": "gate:stars"},
+        ])
     return rows
 
 
@@ -193,8 +200,8 @@ def _root_rows() -> list[dict]:
     rows = [{"label": i18n.t(_GROUP_KEYS[group]),
              "callback_data": keyboards.cb("set", "group", group)}
             for group in _GROUP_KEYS if primary or group != "ai"]
-    # Delegated admins can add/test their own key for the primary-selected model,
-    # but only the primary can switch providers or models.
+    # Delegates can test the shared connection or add a local fallback key;
+    # only the primary can switch providers or models.
     provider = ai_service.active_provider()
     rows.insert(3, {
         "label": i18n.t("set.provider_row" if primary else "set.connection_row",

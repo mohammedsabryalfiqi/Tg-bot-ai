@@ -23,6 +23,8 @@ Telegram Stars needs three things wired together, all handled here:
 from __future__ import annotations
 
 import logging
+import re
+from urllib.parse import urlparse
 
 import database
 import handlers
@@ -48,6 +50,13 @@ def register(bot, cfg) -> None:
             security.run_as_operator(message, lambda: _safe(lambda: _fn(message)))
 
     cmd(["gate", "gates", "subscribe"], cmd_menu)
+
+    @bot.message_handler(commands=["start"], func=lambda m: (
+        getattr(getattr(m, "chat", None), "type", None) == "private"
+        and security.owner_id() is not None and not security.is_operator_msg(m)))
+    def _visitor_start(message):
+        with database.tenant_scope(0):
+            _safe(lambda: on_visitor_start(message))
 
     # Owner-facing screens. `gate:verify` is pressed by *visitors* and is
     # handled below — TeleBot runs only the first matching handler, so it must
@@ -232,7 +241,8 @@ def _stars_markup():
     from keyboards import cb
     kb = types.InlineKeyboardMarkup(row_width=1)
     kb.add(types.InlineKeyboardButton(
-        i18n.t("kbd.gate.stars_toggle"), callback_data=cb("gate", "toggle_stars")))
+        i18n.t("kbd.gate.stars_toggle"), callback_data=cb("gate", "toggle_stars"),
+        style="success" if gate_service.payments_enabled() else "danger"))
     kb.add(types.InlineKeyboardButton(
         i18n.t("kbd.gate.price"), callback_data=cb("gate", "price")))
     kb.add(types.InlineKeyboardButton(
@@ -272,7 +282,8 @@ def on_pay_callback(call) -> None:
     parts = (call.data or "").split(":", 2)
     payload = parts[2] if len(parts) > 2 else ""
     row = database.get_paid_message_by_payload(payload)
-    if row is None or row["status"] != "pending":
+    if (row is None or row["status"] != "pending"
+            or row["user_id"] != call.from_user.id):
         return telegram_api.answer_callback(bot, call.id, i18n.t("gate.pay.expired"),
                                            show_alert=True)
     stars = int(row["stars"] or 0)
@@ -280,13 +291,34 @@ def on_pay_callback(call) -> None:
         row["customer_chat_id"],
         title=i18n.t("gate.invoice.title", name=(database.get_str("business_name") or "").strip()
                      or i18n.t("gate.invoice.default_title")),
-        description=i18n.t("gate.invoice.desc", stars=stars),
+        description=i18n.t("gate.invoice.desc", stars=stars,
+                           name=(database.get_str("business_name") or "").strip()
+                           or i18n.t("gate.invoice.default_title")),
         payload=payload, stars=stars, label=i18n.t("gate.invoice.label"),
     )
     if sent is None:
         return telegram_api.answer_callback(bot, call.id, i18n.t("gate.pay.failed"),
                                             show_alert=True)
     telegram_api.answer_callback(bot, call.id)
+
+
+def on_visitor_start(message) -> None:
+    """Show joining requirements before a visitor sends their first message."""
+    if not database.get_bool("direct_reply_enabled"):
+        return security.handle_non_owner_dm(message)
+    user_id = message.from_user.id
+    if gate_service.subscription_enabled():
+        if not gate_service.channels():
+            return handlers.bot.send_message(message.chat.id, i18n.t("gate.user.unavailable"))
+        missing = gate_service.missing_channels(user_id)
+        if missing:
+            from handlers import direct_messages
+            return direct_messages._ask_to_subscribe(message.chat.id, missing)
+    if gate_service.payments_enabled():
+        key = "gate.user.start_paid" if gate_service.stars_price() else "gate.user.payment_unavailable"
+        return handlers.bot.send_message(message.chat.id, i18n.t(
+            key, stars=gate_service.stars_price(), free=gate_service.free_left(user_id)))
+    handlers.bot.send_message(message.chat.id, i18n.t("gate.user.start"))
 
 
 def on_verify(call) -> None:
@@ -299,6 +331,9 @@ def on_verify(call) -> None:
         # Nothing to check (the gate was switched off meanwhile): say it is fine
         # rather than leaving the visitor staring at a dead button.
         return telegram_api.answer_callback(bot, call.id, i18n.t("gate.user.sub_ok"))
+    if not gate_service.channels():
+        return telegram_api.answer_callback(bot, call.id, i18n.t("gate.user.unavailable"),
+                                            show_alert=True)
     missing = gate_service.missing_channels(user_id, force=True)
     if not missing:
         telegram_api.answer_callback(bot, call.id, i18n.t("gate.user.sub_ok"))
@@ -336,14 +371,21 @@ def request_payment(chat_id: int, user_id: int, text: str) -> bool:
         chat_id,
         title=i18n.t("gate.invoice.title", name=(database.get_str("business_name") or "").strip()
                      or i18n.t("gate.invoice.default_title")),
-        description=i18n.t("gate.invoice.desc", stars=stars),
+        description=i18n.t("gate.invoice.desc", stars=stars,
+                           name=(database.get_str("business_name") or "").strip()
+                           or i18n.t("gate.invoice.default_title")),
         payload=row["payload"],
         stars=stars,
         label=i18n.t("gate.invoice.label"),
     )
     if sent is None:
-        # No invoice -> do not keep the message parked forever.
-        database.set_paid_message_status(row["id"], "failed")
+        # Keep the pending payload usable by the retry button, but never admit
+        # the message until a matching successful_payment arrives.
+        try:
+            handlers.bot.send_message(chat_id, i18n.t("gate.pay.failed"),
+                                      reply_markup=markup)
+        except Exception:
+            log.debug("could not send invoice retry button", exc_info=True)
         return False
     try:
         handlers.bot.send_message(chat_id, prompt, parse_mode="HTML", reply_markup=markup)
@@ -390,10 +432,27 @@ def _save_channel(chat_id: int, text: str) -> None:
     ref = parts[0]
     title = parts[1] if len(parts) > 1 else ""
     link = parts[2] if len(parts) > 2 else ""
+    # Public t.me links can identify a chat. A private invite cannot be used
+    # with getChatMember: it must accompany the numeric -100… chat id.
+    if ref.startswith(("https://", "http://", "t.me/")):
+        parsed = urlparse(ref if "://" in ref else "https://" + ref)
+        name = parsed.path.strip("/")
+        if parsed.hostname not in {"t.me", "telegram.me"} or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{3,31}", name):
+            return handlers.bot.send_message(chat_id, i18n.t("gate.sub.bad"))
+        ref = "@" + name
     lookup = ref if ref.startswith("@") or ref.lstrip("-").isdigit() else f"@{ref}"
+    if not (re.fullmatch(r"@[A-Za-z][A-Za-z0-9_]{3,31}", lookup)
+            or re.fullmatch(r"-100[0-9]+", lookup)):
+        return handlers.bot.send_message(chat_id, i18n.t("gate.sub.bad"))
     info = telegram_api.get_chat(lookup) or {}
     title = title or info.get("title") or ref
     link = link or info.get("invite_link") or ""
+    if not link and lookup.startswith("-100"):
+        return handlers.bot.send_message(chat_id, i18n.t("gate.sub.bad"))
+    if link:
+        parsed = urlparse(link)
+        if parsed.scheme != "https" or parsed.hostname not in {"t.me", "telegram.me"}:
+            return handlers.bot.send_message(chat_id, i18n.t("gate.sub.bad"))
     kind = "group" if str(info.get("type", "")).lower() in ("group", "supergroup") else "channel"
     channel_id = gate_service.add_channel(lookup, title=title, invite_link=link, kind=kind)
     handlers.bot.send_message(
@@ -408,6 +467,13 @@ def _save_channel(chat_id: int, text: str) -> None:
 # =============================================================================
 # Payments
 # =============================================================================
+def _payment_matches(row, user_id: int, payment) -> bool:
+    return (row["user_id"] == user_id
+            and getattr(payment, "currency", None) == "XTR"
+            and getattr(payment, "total_amount", None) == row["stars"]
+            and row["stars"] > 0)
+
+
 def on_pre_checkout(query) -> None:
     """Approve a Stars payment; Telegram refunds it if we answer ``ok=False``."""
     payload = getattr(query, "invoice_payload", "") or ""
@@ -415,6 +481,12 @@ def on_pre_checkout(query) -> None:
     if row is None or row["status"] != "pending":
         return telegram_api.answer_pre_checkout_query(query.id, False,
                                                       i18n.t("gate.pay.expired"))
+    if not _payment_matches(row, query.from_user.id, query):
+        return telegram_api.answer_pre_checkout_query(query.id, False,
+                                                      i18n.t("gate.pay.expired"))
+    if not gate_service.subscription_ok(query.from_user.id):
+        return telegram_api.answer_pre_checkout_query(query.id, False,
+                                                      i18n.t("gate.user.unavailable"))
     telegram_api.answer_pre_checkout_query(query.id, True)
 
 
@@ -422,6 +494,11 @@ def on_successful_payment(message) -> None:
     payment = getattr(message, "successful_payment", None)
     payload = getattr(payment, "invoice_payload", "") or ""
     charge_id = getattr(payment, "telegram_payment_charge_id", "") or ""
+    pending = database.get_paid_message_by_payload(payload)
+    if (pending is None or not charge_id
+            or not _payment_matches(pending, message.from_user.id, payment)):
+        log.warning("payment does not match its parked message")
+        return
     row = gate_service.confirm_payment(payload, charge_id)
     if row is None:
         log.info("payment for an unknown payload ignored")
