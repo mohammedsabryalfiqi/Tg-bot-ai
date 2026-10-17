@@ -414,18 +414,19 @@ def _create_schema() -> None:
             );
 
             CREATE TABLE IF NOT EXISTS paid_messages (
-                id                INTEGER PRIMARY KEY AUTOINCREMENT,
-                tenant_id         INTEGER NOT NULL DEFAULT 0,
-                customer_chat_id  INTEGER NOT NULL,
-                user_id           INTEGER,
-                payload           TEXT NOT NULL DEFAULT '',
-                charge_id         TEXT NOT NULL DEFAULT '',
-                stars             INTEGER NOT NULL DEFAULT 0,
-                message_text      TEXT NOT NULL DEFAULT '',
-                status            TEXT NOT NULL DEFAULT 'pending',
-                delivered         INTEGER NOT NULL DEFAULT 0,
-                created_at        TEXT,
-                paid_at           TEXT
+                id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+                tenant_id               INTEGER NOT NULL DEFAULT 0,
+                business_connection_id  TEXT,
+                customer_chat_id        INTEGER NOT NULL,
+                user_id                 INTEGER,
+                payload                 TEXT NOT NULL DEFAULT '',
+                charge_id               TEXT NOT NULL DEFAULT '',
+                stars                   INTEGER NOT NULL DEFAULT 0,
+                message_text            TEXT NOT NULL DEFAULT '',
+                status                  TEXT NOT NULL DEFAULT 'pending',
+                delivered               INTEGER NOT NULL DEFAULT 0,
+                created_at              TEXT,
+                paid_at                 TEXT
             );
 
             CREATE INDEX IF NOT EXISTS idx_messages_bc_chat_time
@@ -460,6 +461,9 @@ def _create_schema() -> None:
         admin_columns = {row["name"] for row in cur.execute("PRAGMA table_info(assistant_admins)")}
         if "enabled" not in admin_columns:
             cur.execute("ALTER TABLE assistant_admins ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1")
+        paid_columns = {row["name"] for row in cur.execute("PRAGMA table_info(paid_messages)")}
+        if "business_connection_id" not in paid_columns:
+            cur.execute("ALTER TABLE paid_messages ADD COLUMN business_connection_id TEXT DEFAULT NULL")
 
 
 # =============================================================================
@@ -1711,28 +1715,29 @@ def clear_gate_checks() -> None:
 # DAL — paid messages (Telegram Stars)
 # =============================================================================
 def create_paid_message(customer_chat_id: int, user_id: int | None, payload: str, stars: int,
-                        message_text: str, *, status: str = "pending") -> int:
+                        message_text: str, *, business_connection_id: str | None = None,
+                        status: str = "pending") -> int:
     with write_tx() as cur:
         cur.execute(
-            "INSERT INTO paid_messages(tenant_id, customer_chat_id, user_id, payload, stars, "
-            "message_text, status, created_at) VALUES (?,?,?,?,?,?,?,?)",
-            (tenant_id(), int(customer_chat_id), user_id, payload, int(stars), message_text,
-             status, utils.now_iso()),
+            "INSERT INTO paid_messages(tenant_id, business_connection_id, customer_chat_id, user_id, "
+            "payload, stars, message_text, status, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+            (tenant_id(), business_connection_id, int(customer_chat_id), user_id, payload, int(stars),
+             message_text, status, utils.now_iso()),
         )
         return int(cur.lastrowid)
 
 
 def reserve_free_message(customer_chat_id: int, user_id: int, payload: str,
-                         text: str, quota: int) -> bool:
+                         text: str, quota: int, *, business_connection_id: str | None = None) -> bool:
     """Atomically spend one free use; concurrent updates cannot exceed quota."""
     with write_tx() as cur:
         cur.execute(
-            "INSERT INTO paid_messages(tenant_id, customer_chat_id, user_id, payload, "
+            "INSERT INTO paid_messages(tenant_id, business_connection_id, customer_chat_id, user_id, payload, "
             "stars, message_text, status, created_at) "
-            "SELECT ?,?,?,?,0,?,'free',? WHERE (SELECT COUNT(*) FROM paid_messages "
+            "SELECT ?,?,?,?,?,0,?,'free',? WHERE (SELECT COUNT(*) FROM paid_messages "
             "WHERE tenant_id=? AND customer_chat_id=? AND stars=0 "
             "AND status IN ('free','paid')) < ?",
-            (tenant_id(), customer_chat_id, user_id, payload, text, utils.now_iso(),
+            (tenant_id(), business_connection_id, customer_chat_id, user_id, payload, text, utils.now_iso(),
              tenant_id(), customer_chat_id, max(0, quota)),
         )
         return cur.rowcount > 0
@@ -1745,10 +1750,14 @@ def get_paid_message(message_id: int):
         return cur.fetchone()
 
 
-def get_paid_message_by_payload(payload: str):
+def get_paid_message_by_payload(payload: str, scoped: bool = False):
     with read_cursor() as cur:
-        cur.execute("SELECT * FROM paid_messages WHERE payload=? AND tenant_id=? "
-                    "ORDER BY id DESC LIMIT 1", (payload, tenant_id()))
+        if scoped:
+            cur.execute("SELECT * FROM paid_messages WHERE payload=? AND tenant_id=? "
+                        "ORDER BY id DESC LIMIT 1", (payload, tenant_id()))
+        else:
+            cur.execute("SELECT * FROM paid_messages WHERE payload=? "
+                        "ORDER BY id DESC LIMIT 1", (payload,))
         return cur.fetchone()
 
 
@@ -1756,22 +1765,22 @@ def mark_paid_message_paid(payload: str, charge_id: str = "") -> bool:
     with write_tx() as cur:
         cur.execute(
             "UPDATE paid_messages SET status='paid', charge_id=?, paid_at=? "
-            "WHERE payload=? AND tenant_id=? AND status='pending'",
-            (charge_id, utils.now_iso(), payload, tenant_id()),
+            "WHERE payload=? AND status='pending'",
+            (charge_id, utils.now_iso(), payload),
         )
         return cur.rowcount > 0
 
 
 def mark_paid_message_delivered(message_id: int) -> None:
     with write_tx() as cur:
-        cur.execute("UPDATE paid_messages SET delivered=1 WHERE id=? AND tenant_id=?",
-                    (int(message_id), tenant_id()))
+        cur.execute("UPDATE paid_messages SET delivered=1 WHERE id=?",
+                    (int(message_id),))
 
 
 def set_paid_message_status(message_id: int, status: str) -> bool:
     with write_tx() as cur:
-        cur.execute("UPDATE paid_messages SET status=? WHERE id=? AND tenant_id=?",
-                    (status, int(message_id), tenant_id()))
+        cur.execute("UPDATE paid_messages SET status=? WHERE id=?",
+                    (status, int(message_id)))
         return cur.rowcount > 0
 
 

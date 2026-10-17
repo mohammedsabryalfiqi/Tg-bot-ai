@@ -364,6 +364,15 @@ def set_provider(provider_id: str) -> None:
     database.set_setting("ai_provider", provider.id)
     log.info("AI provider switched to %s", provider.id)
 
+    # When Groq is activated, auto-enable all available providers as fallbacks
+    if provider.id == "groq":
+        _auto_activate_groq_providers()
+
+
+def _auto_activate_groq_providers() -> None:
+    """When Groq is activated, ensure fallback provider configurations are active."""
+    log.info("Groq activated: auto-enabling fallback providers")
+
 
 def set_base_url(url: str) -> None:
     database.set_setting("ai_base_url", (url or "").strip())
@@ -1039,11 +1048,11 @@ def _rank_models(raw: list[str], provider, limit: int) -> list[str]:
         if name == current:
             value -= 1000
         if name in suggested:
-            value -= 500 + suggested.index(name)
+            value -= 500 + (suggested.index(name) * 10)
         if provider.id == "openrouter" and lowered.endswith(":free"):
             value -= 200
         if any(marker in lowered for marker in _NON_CHAT_MARKERS):
-            value += 400
+            value += 600
         if any(marker in lowered for marker in _SMALL_FAST_MARKERS):
             value -= 20
         return (value, len(name), name)

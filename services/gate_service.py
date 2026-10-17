@@ -226,15 +226,18 @@ def new_payload(user_id: int) -> str:
 
 
 def park_message(user_id: int, chat_id: int, text: str, *, stars: int | None = None,
-                 free: bool = False) -> dict | None:
+                 free: bool = False, business_connection_id: str | None = None) -> dict | None:
     """Store the message until the payment lands (or record a free use)."""
     payload = new_payload(user_id)
     amount = 0 if free else int(stars if stars is not None else stars_price())
     if free:
-        if not database.reserve_free_message(chat_id, user_id, payload, text, free_quota()):
+        if not database.reserve_free_message(chat_id, user_id, payload, text, free_quota(),
+                                             business_connection_id=business_connection_id):
             return None
     else:
-        database.create_paid_message(chat_id, user_id, payload, amount, text, status="pending")
+        database.create_paid_message(chat_id, user_id, payload, amount, text,
+                                     business_connection_id=business_connection_id,
+                                     status="pending")
     row = database.get_paid_message_by_payload(payload)
     if free:
         log.info("free message %s/%s used by chat=%s", free_quota(), free_quota(),

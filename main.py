@@ -202,31 +202,49 @@ BOT_COMMANDS = [
 def set_bot_commands(bot: telebot.TeleBot) -> None:
     """Publish the command menu, translated per Telegram client language.
 
-    Telegram picks the list matching the user's app language, so an Arabic user
-    sees Arabic descriptions while an English user sees English ones.
+    Admin/operator commands are restricted so that non-admins (regular customers
+    and visitors) do not see the slash commands autocomplete list.
+    Default scope gets an empty list (or only /start) while admin chat scopes
+    receive full command menus.
     """
+    import security
     default_lang = i18n.language()
-    for language_code in (None, "ar", "en"):
-        code = default_lang if language_code is None else language_code
-        catalog = i18n.catalog(code)
-        commands = [
-            telebot.types.BotCommand(command, catalog.get(key, i18n.t(key)))
-            for command, key in BOT_COMMANDS
-        ]
+
+    # Clear default commands for ordinary users so they don't see management / commands
+    try:
+        bot.delete_my_commands(scope=telebot.types.BotCommandScopeDefault())
+    except Exception:
         try:
-            bot.set_my_commands(commands, language_code=language_code)
-        except TypeError:
-            # Older pyTelegramBotAPI without language_code: publish the default
-            # list once and stop trying.
-            if language_code is None:
-                try:
-                    bot.set_my_commands(commands)
-                except Exception:
-                    log.debug("set_my_commands failed", exc_info=True)
-            break
+            bot.set_my_commands([], scope=telebot.types.BotCommandScopeDefault())
         except Exception:
-            log.debug("set_my_commands failed for %s", language_code or "default",
-                      exc_info=True)
+            log.debug("could not clear default bot commands scope", exc_info=True)
+
+    # For known admins/owners, set full commands in their private chat scope
+    admin_ids = set()
+    owner_id = security.owner_id()
+    if owner_id:
+        admin_ids.add(owner_id)
+    try:
+        for aid in database.list_assistant_admins():
+            admin_ids.add(aid)
+    except Exception:
+        pass
+
+    for admin_chat_id in admin_ids:
+        scope = telebot.types.BotCommandScopeChat(admin_chat_id)
+        for language_code in (None, "ar", "en"):
+            code = default_lang if language_code is None else language_code
+            catalog = i18n.catalog(code)
+            commands = [
+                telebot.types.BotCommand(command, catalog.get(key, i18n.t(key)))
+                for command, key in BOT_COMMANDS
+            ]
+            try:
+                bot.set_my_commands(commands, scope=scope, language_code=language_code)
+            except Exception:
+                log.debug("set_my_commands failed for admin %s (%s)",
+                          admin_chat_id, language_code or "default", exc_info=True)
+
     try:
         bot.set_my_description(i18n.t("main.description"))
         bot.set_my_short_description(i18n.t("main.description_short"))

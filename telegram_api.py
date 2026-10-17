@@ -238,13 +238,34 @@ def download_file_bytes(file_id, *, max_bytes: int = MAX_DOWNLOAD_BYTES) -> byte
 # =============================================================================
 # Telegram Stars invoices (the paid-message gate)
 # =============================================================================
+def create_star_invoice_link(title: str, description: str, payload: str, stars: int,
+                             *, label: str = "", business_connection_id: str | None = None) -> str | None:
+    """Create a Telegram Stars (XTR) invoice link via createInvoiceLink.
+
+    Works for bot direct chats as well as linked Telegram Business accounts
+    when business_connection_id is supplied. Returns the https://t.me/$... link or None.
+    """
+    prices = [{"label": (label or title)[:32], "amount": int(stars)}]
+    data = {
+        "title": title[:32],
+        "description": description[:255],
+        "payload": payload,
+        "currency": "XTR",
+        "prices": json.dumps(prices),
+    }
+    bcid = api_connection_id(business_connection_id)
+    if bcid:
+        data["business_connection_id"] = bcid
+    try:
+        res = _post("createInvoiceLink", data)
+        return res if isinstance(res, str) else res.get("result") or str(res)
+    except TelegramAPIError as e:
+        log.warning("createInvoiceLink failed: %s", e.description)
+        return None
+
+
 def send_star_invoice(chat_id, *, title: str, description: str, payload: str, stars: int,
                       label: str = "", reply_markup=None) -> dict | None:
-    """Send a Telegram Stars invoice (currency ``XTR``: 1 star = 1 unit).
-
-    Uses the raw API because Stars invoices must not carry a provider token, and
-    older TeleBot wrappers insist on one. Returns the sent message or None.
-    """
     data = {
         "chat_id": chat_id,
         "title": title[:32],
