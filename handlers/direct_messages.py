@@ -402,11 +402,13 @@ def _deliver_auto(conn, chat_id: int, customer_message_id, customer_text: str,
 def process_paid_message(row: dict) -> bool:
     """Deliver a message whose Telegram Stars payment just landed.
 
-    Same pipeline as any other private message (history, memory, drafting,
+    Same pipeline as any other message (history, memory, drafting,
     signature), minus batching and rate limiting: the person already paid, so
-    the message is answered now.
+    the message is answered now. Works for both direct messages and linked
+    Telegram Business account chats.
     """
-    with database.tenant_scope(0):
+    tenant = row.get("tenant_id", 0) if isinstance(row, dict) else 0
+    with database.tenant_scope(tenant):
         try:
             return _process_paid_scoped(row)
         except Exception:
@@ -419,7 +421,12 @@ def _process_paid_scoped(row: dict) -> bool:
     text = (row["message_text"] or "").strip()
     if not chat_id or not text:
         return False
-    bcid = business_service.ensure_direct_connection()
+
+    bcid = row.get("business_connection_id")
+    is_biz = bool(bcid)
+    if not is_biz:
+        bcid = business_service.ensure_direct_connection()
+
     conn = business_service.get_connection(bcid)
     if conn is None or not conn["is_enabled"]:
         return False
@@ -428,7 +435,8 @@ def _process_paid_scoped(row: dict) -> bool:
         return False
 
     try:
-        handlers.bot.send_message(chat_id, i18n.t("gate.pay.done"))
+        telegram_api.send_reply(handlers.bot, chat_id, i18n.t("gate.pay.done"),
+                                business_connection_id=bcid if is_biz else None)
     except Exception:
         log.debug("could not send the payment confirmation", exc_info=True)
 

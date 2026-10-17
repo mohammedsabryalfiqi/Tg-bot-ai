@@ -54,6 +54,7 @@ STRINGS: dict[str, str] = {
     "kbd.panel.settings": "⚙️ الإعدادات",
     "kbd.panel.pending": "📨 موافقات معلّقة",
     "kbd.panel.mem_clear": "🧹 مسح الذاكرة",
+    "kbd.panel.fonts": "🔤 بحث الخطوط (TTF/OTF)",
     "kbd.panel.setup": "🚀 دليل الإعداد",
     "kbd.panel.health": "❤️ فحص النظام",
     "kbd.back": "« رجوع",

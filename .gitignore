@@ -237,3 +237,6 @@ storage/uploads/*
 !storage/uploads/.gitkeep
 storage/vector_store/*
 !storage/vector_store/.gitkeep
+
+# Temporary cloud downloads
+google_drive/

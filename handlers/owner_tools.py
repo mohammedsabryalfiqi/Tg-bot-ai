@@ -456,4 +456,28 @@ def on_callback(call) -> None:
         telegram_api.answer_callback(bot, call.id)
         return setup_guide.send_step(chat_id, arg)
 
+    if action == "fonts":
+        from services import font_service
+        fonts = font_service.list_cloud_fonts()
+        telegram_api.answer_callback(bot, call.id)
+        text = "🔤 <b>قائمة الخطوط السحابية المتوفرة (Google Drive / Cloud):</b>\nاختر خطًا لتحميله وإرساله فورًا:"
+        return bot.send_message(chat_id, text, parse_mode="HTML",
+                                reply_markup=keyboards.fonts_list(fonts))
+
+    if action == "dlfont":
+        from services import font_service
+        import io
+        fonts = font_service.list_cloud_fonts()
+        try:
+            fidx = int(arg)
+            font_meta = fonts[fidx]
+            fname, fdata = font_service.get_font_content(font_meta)
+            bio = io.BytesIO(fdata)
+            bio.name = fname
+            bot.send_document(chat_id, bio, caption=f"📁 خط سحابي: <b>{fname}</b>", parse_mode="HTML")
+            telegram_api.answer_callback(bot, call.id, "تم إرسال الخط بنجاح!")
+        except Exception as e:
+            telegram_api.answer_callback(bot, call.id, "فشل تحميل الخط", show_alert=True)
+        return
+
     telegram_api.answer_callback(bot, call.id)

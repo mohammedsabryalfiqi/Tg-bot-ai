@@ -205,6 +205,34 @@ def _process_business_message_scoped(message) -> None:
         log.info("duplicate inbound message %s ignored", message_id)
         return
 
+    # Check paid messages / entry gate per account
+    from handlers import gates as gate_handler
+    from services import gate_service
+    if gate_service.payments_enabled():
+        free = gate_service.park_message(sender_id, customer_chat_id, text, free=True,
+                                         business_connection_id=bcid)
+        if free is None:
+            # Free quota used up or 0 -> require stars payment
+            if gate_service.stars_price() <= 0:
+                telegram_api.send_reply(handlers.bot, customer_chat_id,
+                                        i18n.t("gate.user.payment_unavailable"),
+                                        business_connection_id=bcid)
+                return
+            if not gate_handler.request_payment(customer_chat_id, sender_id, text,
+                                                business_connection_id=bcid):
+                log.warning("could not request star payment for business chat=%s",
+                            utils.mask_id(customer_chat_id))
+            return
+        else:
+            left = gate_service.free_left(sender_id)
+            if left == 0:
+                try:
+                    telegram_api.send_reply(handlers.bot, customer_chat_id,
+                                            gate_service.free_last_notice(),
+                                            business_connection_id=bcid)
+                except Exception:
+                    log.debug("could not send last free notice to business chat", exc_info=True)
+
     # Record the inbound message (history + rate-limit window).
     database.insert_message(bcid, customer_chat_id, message_id, "in", "user", text)
 

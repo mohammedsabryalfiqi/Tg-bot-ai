@@ -353,7 +353,8 @@ def on_verify(call) -> None:
     telegram_api.answer_callback(bot, call.id, i18n.t("gate.user.still_missing_alert"))
 
 
-def request_payment(chat_id: int, user_id: int, text: str) -> bool:
+def request_payment(chat_id: int, user_id: int, text: str,
+                    business_connection_id: str | None = None) -> bool:
     """Park the message and invoice the person for it (Stars).
 
     Returns True when the invoice was sent — the caller then stops: the message
@@ -362,10 +363,37 @@ def request_payment(chat_id: int, user_id: int, text: str) -> bool:
     stars = gate_service.stars_price()
     if stars <= 0:
         return False
-    row = gate_service.park_message(user_id, chat_id, text, stars=stars)
+    row = gate_service.park_message(user_id, chat_id, text, stars=stars,
+                                    business_connection_id=business_connection_id)
     if row is None:
         return False
     prompt = i18n.t("gate.user.pay", stars=stars)
+
+    # If this is inside a business connection, send an invoice link via reply button
+    if business_connection_id:
+        title = (database.get_str("business_name") or "").strip() or i18n.t("gate.invoice.default_title")
+        desc = i18n.t("gate.invoice.desc", stars=stars, name=title)
+        inv_url = telegram_api.create_star_invoice_link(
+            title=title,
+            description=desc,
+            payload=row["payload"],
+            stars=stars,
+            label=i18n.t("gate.invoice.label"),
+            business_connection_id=business_connection_id,
+        )
+        markup = keyboards.pay_button(stars, row["payload"], url=inv_url)
+        try:
+            telegram_api.send_reply(handlers.bot, chat_id, prompt,
+                                    business_connection_id=business_connection_id,
+                                    reply_markup=markup)
+            log.info("business stars invoice sent to chat=%s (%s stars, bcid=%s)",
+                     utils.mask_id(chat_id), stars, utils.mask_connection(business_connection_id))
+            return True
+        except Exception:
+            log.warning("could not send business stars invoice link to chat=%s",
+                        utils.mask_id(chat_id), exc_info=True)
+            return False
+
     markup = keyboards.pay_button(stars, row["payload"])
     sent = telegram_api.send_star_invoice(
         chat_id,

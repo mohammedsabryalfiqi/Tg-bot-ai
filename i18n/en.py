@@ -56,6 +56,7 @@ STRINGS: dict[str, str] = {
     "kbd.panel.settings": "⚙️ Settings",
     "kbd.panel.pending": "📨 Pending approvals",
     "kbd.panel.mem_clear": "🧹 Clear memory",
+    "kbd.panel.fonts": "🔤 Search Fonts (TTF/OTF)",
     "kbd.panel.setup": "🚀 Setup guide",
     "kbd.panel.health": "❤️ Health check",
     "kbd.back": "« Back",

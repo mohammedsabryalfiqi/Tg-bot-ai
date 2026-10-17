@@ -65,7 +65,7 @@ def control_panel(auto_on: bool, approval_on: bool, mode: str | None = None) -> 
     )
     kb.add(
         _btn(i18n.t("kbd.panel.pending"), cb("panel", "pending")),
-        _btn(i18n.t("kbd.panel.mem_clear"), cb("panel", "mem_clear"), "danger"),
+        _btn(i18n.t("kbd.panel.fonts"), cb("tool", "fonts")),
     )
     kb.add(
         _btn(i18n.t("kbd.panel.setup"), cb("tool", "setup")),
@@ -459,10 +459,13 @@ def required_channels(rows: list) -> types.InlineKeyboardMarkup:
     return kb
 
 
-def pay_button(stars: int, payload: str) -> types.InlineKeyboardMarkup:
-    """Button that re-opens the Stars invoice for a parked message."""
+def pay_button(stars: int, payload: str, url: str | None = None) -> types.InlineKeyboardMarkup:
+    """Button that re-opens or opens the Stars invoice for a parked message."""
     kb = types.InlineKeyboardMarkup(row_width=1)
-    kb.add(_btn(i18n.t("kbd.paid.buy", stars=stars), cb("pay", "buy", payload)))
+    if url:
+        kb.add(types.InlineKeyboardButton(i18n.t("kbd.paid.buy", stars=stars), url=url))
+    else:
+        kb.add(_btn(i18n.t("kbd.paid.buy", stars=stars), cb("pay", "buy", payload)))
     return kb
 
 
@@ -488,4 +491,15 @@ def confirm(token: str) -> types.InlineKeyboardMarkup:
         _btn(i18n.t("kbd.confirm.yes"), cb("confirm", "yes", token), "success"),
         _btn(i18n.t("kbd.confirm.no"), cb("confirm", "no", token), "danger"),
     )
+    return kb
+
+
+def fonts_list(fonts: list[dict], query: str = "") -> types.InlineKeyboardMarkup:
+    """Inline keyboard for selecting and downloading cloud fonts."""
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    for idx, f in enumerate(fonts[:8]):
+        size_kb = f.get("size", 0) // 1024
+        label = f"📥 {f['name']} ({size_kb} KB)"
+        kb.add(_btn(label, cb("tool", "dlfont", idx)))
+    kb.add(_btn(i18n.t("kbd.back"), cb("panel", "status")))
     return kb
