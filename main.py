@@ -54,6 +54,7 @@ VERSION = "2.0.0"
 # be present or the corresponding handlers never fire.
 ALLOWED_UPDATES = [
     "message",
+    "pre_checkout_query",
     "callback_query",
     "business_connection",
     "business_message",

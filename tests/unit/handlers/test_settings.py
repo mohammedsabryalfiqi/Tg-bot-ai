@@ -114,3 +114,24 @@ def test_limits_screen_edits_the_usage_caps(env, make_call):
     assert "set:num:max_reply_chars" in data
     assert "set:num:max_messages_per_customer_per_hour" in data
     assert "set:num:owner_takeover_pause_minutes" in data
+
+
+def test_message_group_offers_welcome_and_payment_edit_buttons(env, make_call):
+    settings_handler.on_settings_callback(make_call(data="set:group:messages"))
+    markup = handlers.bot.edit_message_text.call_args.kwargs["reply_markup"]
+    data = [btn.callback_data for row in markup.keyboard for btn in row]
+    assert "set:text:welcome_text" in data
+    assert "set:text:payment_message" in data
+
+
+def test_payment_message_can_be_updated_and_reset(env):
+    from types import SimpleNamespace
+
+    message = SimpleNamespace(chat=SimpleNamespace(id=OWNER_CHAT),
+                              text="Pay {stars} Stars to continue.", caption=None)
+    settings_handler.apply_pending(message, "set_text", {"key": "payment_message"})
+    assert env.get_str("payment_message") == "Pay {stars} Stars to continue."
+
+    message.text = "clear"
+    settings_handler.apply_pending(message, "set_text", {"key": "payment_message"})
+    assert env.get_str("payment_message") == ""

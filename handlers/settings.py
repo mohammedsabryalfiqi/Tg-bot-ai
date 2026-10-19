@@ -32,6 +32,7 @@ log = logging.getLogger("smartel.settings")
 
 _GROUP_KEYS = {
     "reply": "set.group.reply",
+    "messages": "set.group.messages",
     "persona": "set.group.persona",
     "lang": "set.group.lang",
     "ai": "set.group.ai",
@@ -53,10 +54,15 @@ SETTINGS = [
     {"key": "nontext_ack_message", "group": "reply", "type": "text",
      "hint_key": "set.opt.nontext_ack_message.hint"},
     {"key": "greet_new_customers", "group": "reply", "type": "bool"},
-    {"key": "welcome_text", "group": "reply", "type": "text"},
     {"key": "direct_reply_enabled", "group": "reply", "type": "bool",
      "hint_key": "set.opt.direct_reply_enabled.hint"},
     {"key": "public_direct_bot_chat_enabled", "group": "reply", "type": "bool"},
+
+    # --- customer-facing message templates -----------------------------------
+    {"key": "welcome_text", "group": "messages", "type": "text",
+     "hint_key": "set.opt.welcome_text.hint"},
+    {"key": "payment_message", "group": "messages", "type": "text",
+     "hint_key": "set.opt.payment_message.hint"},
 
     # --- persona --------------------------------------------------------------
     {"key": "assistant_name", "group": "persona", "type": "str",
@@ -116,7 +122,7 @@ SETTINGS = [
     {"key": "unanswered_enabled", "group": "learning", "type": "bool",
      "hint_key": "set.opt.unanswered_enabled.hint"},
 
-    # --- entry gates (private messages only) ----------------------------------
+    # --- entry gates (private bot chats + linked Business Stars payments) -----
     {"key": "require_subscription_enabled", "group": "gate", "type": "bool",
      "hint_key": "set.opt.require_subscription_enabled.hint"},
     {"key": "paid_messages_enabled", "group": "gate", "type": "bool",
@@ -390,6 +396,9 @@ def apply_pending(message, kind: str, context: dict) -> None:
         return handlers.notify_owner(i18n.t("set.empty"))
 
     if kind == "set_text":
+        if key in {"welcome_text", "payment_message"} and raw.lower() in {"clear", "default"}:
+            database.set_setting(key, "")
+            return handlers.notify_owner(i18n.t("set.text_reset", label=label_of(spec)))
         database.set_setting(key, raw)
         return handlers.notify_owner(
             i18n.t("set.text_saved", label=label_of(spec), value=utils.escape(raw[:400])))

@@ -70,6 +70,7 @@ def test_set_mode_off_keeps_nothing_on(env):
     owner_tools.set_mode("auto")
     assert owner_tools.set_mode("off") == "off"
     assert env.get_bool("auto_reply_enabled") is False
+    assert env.get_bool("approval_mode_enabled") is False
     assert owner_tools.current_mode() == "off"
 
 

@@ -366,3 +366,20 @@ def test_no_automation_notifies_instead_of_answering(penv, make_message, mocker)
     chat.assert_not_called()
     assert penv.db.count_pending_approvals() == 0
     assert _out_count(penv.db) == 0
+
+
+def test_off_master_switch_does_not_leave_approval_drafts_running(
+    penv, make_message, mocker
+):
+    """An old/default approval flag cannot override the owner's OFF switch."""
+    penv.db.set_setting("auto_reply_enabled", False)
+    penv.db.set_setting("approval_mode_enabled", True)
+    chat = mocker.patch("services.ai_service.chat")
+
+    bu.process_business_message(make_message(
+        business_connection_id="bc1", user_id=10, chat_id=5, text="hello"
+    ))
+
+    chat.assert_not_called()
+    assert penv.db.count_pending_approvals() == 0
+    assert _out_count(penv.db) == 0

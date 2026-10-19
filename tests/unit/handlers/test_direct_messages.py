@@ -93,12 +93,36 @@ def test_operator_messages_are_left_to_the_owner_flow(direct_env, db):
 
 
 # --- helpers ------------------------------------------------------------------
-def test_automation_switch_reads_both_modes(direct_env, db):
+def test_auto_reply_is_the_master_switch_for_both_reply_modes(direct_env, db):
     db.set_setting("auto_reply_enabled", False)
     db.set_setting("approval_mode_enabled", False)
     assert dm._any_automation_on() is False
+
+    # A stale/default approval flag must not keep an explicitly-off account
+    # generating drafts. Draft mode itself enables the master switch.
     db.set_setting("approval_mode_enabled", True)
+    assert dm._any_automation_on() is False
+    db.set_setting("auto_reply_enabled", True)
     assert dm._any_automation_on() is True
+
+
+def test_a_paid_message_does_not_bypass_off_mode(direct_env, mocker):
+    from services import business_service
+
+    direct_env.db.set_setting("auto_reply_enabled", False)
+    direct_env.db.set_setting("approval_mode_enabled", True)
+    business_service.ensure_direct_connection()
+    notify = mocker.patch("handlers.notify_owner")
+    send = mocker.patch("telegram_api.send_reply")
+
+    delivered = dm.process_paid_message({
+        "tenant_id": 0, "customer_chat_id": CUSTOMER,
+        "message_text": "paid question", "stars": 25, "id": 1,
+    })
+
+    assert delivered is False
+    notify.assert_called_once()
+    send.assert_not_called()
 
 
 def test_the_registered_handler_survives_a_crash(direct_env, monkeypatch):

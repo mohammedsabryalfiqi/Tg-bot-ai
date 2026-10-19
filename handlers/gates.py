@@ -1,7 +1,8 @@
 """Entry gates: forced subscription and Telegram Stars paid messages (`/gate`).
 
-Both gates are **off by default** and only ever applied to the direct-message
-pipeline — a Telegram Business customer chat keeps working exactly as before.
+Both gates are **off by default**. Subscription checks apply to direct bot DMs;
+Stars invoices can be sent either in a direct bot DM or inside the linked Telegram
+Business conversation by binding the invoice link to its business connection.
 
 Screens
 -------
@@ -287,13 +288,35 @@ def on_pay_callback(call) -> None:
         return telegram_api.answer_callback(bot, call.id, i18n.t("gate.pay.expired"),
                                            show_alert=True)
     stars = int(row["stars"] or 0)
+    bcid = row["business_connection_id"]
+    name = (database.get_str("business_name") or "").strip() \
+        or i18n.t("gate.invoice.default_title")
+    if bcid:
+        # Old retry buttons from Business chats must also stay on the linked
+        # account; never open a normal bot-chat invoice for these rows.
+        inv_url = telegram_api.create_star_invoice_link(
+            title=name, description=i18n.t("gate.invoice.desc", stars=stars, name=name),
+            payload=payload, stars=stars, label=i18n.t("gate.invoice.label"),
+            business_connection_id=bcid,
+        )
+        if not inv_url:
+            return telegram_api.answer_callback(bot, call.id, i18n.t("gate.pay.failed"),
+                                                show_alert=True)
+        try:
+            telegram_api.send_reply(
+                bot, row["customer_chat_id"], _payment_prompt(stars),
+                business_connection_id=bcid,
+                reply_markup=keyboards.pay_button(stars, payload, url=inv_url),
+            )
+        except Exception:
+            return telegram_api.answer_callback(bot, call.id, i18n.t("gate.pay.failed"),
+                                                show_alert=True)
+        return telegram_api.answer_callback(bot, call.id)
+
     sent = telegram_api.send_star_invoice(
         row["customer_chat_id"],
-        title=i18n.t("gate.invoice.title", name=(database.get_str("business_name") or "").strip()
-                     or i18n.t("gate.invoice.default_title")),
-        description=i18n.t("gate.invoice.desc", stars=stars,
-                           name=(database.get_str("business_name") or "").strip()
-                           or i18n.t("gate.invoice.default_title")),
+        title=i18n.t("gate.invoice.title", name=name),
+        description=i18n.t("gate.invoice.desc", stars=stars, name=name),
         payload=payload, stars=stars, label=i18n.t("gate.invoice.label"),
     )
     if sent is None:
@@ -353,6 +376,18 @@ def on_verify(call) -> None:
     telegram_api.answer_callback(bot, call.id, i18n.t("gate.user.still_missing_alert"))
 
 
+def _payment_prompt(stars: int) -> str:
+    """Use the account's custom payment text, or the localized default.
+
+    ``{stars}`` is the only supported placeholder; unknown brace-delimited text
+    is left untouched so ordinary customer-facing copy cannot break formatting.
+    """
+    custom = (database.get_str("payment_message") or "").strip()
+    if not custom:
+        return i18n.t("gate.user.pay", stars=stars)
+    return custom.replace("{stars}", str(stars))
+
+
 def request_payment(chat_id: int, user_id: int, text: str,
                     business_connection_id: str | None = None) -> bool:
     """Park the message and invoice the person for it (Stars).
@@ -367,7 +402,7 @@ def request_payment(chat_id: int, user_id: int, text: str,
                                     business_connection_id=business_connection_id)
     if row is None:
         return False
-    prompt = i18n.t("gate.user.pay", stars=stars)
+    prompt = _payment_prompt(stars)
 
     # If this is inside a business connection, send an invoice link via reply button
     if business_connection_id:
@@ -381,6 +416,18 @@ def request_payment(chat_id: int, user_id: int, text: str,
             label=i18n.t("gate.invoice.label"),
             business_connection_id=business_connection_id,
         )
+        if not inv_url:
+            # Never fall back to sendInvoice in the bot's private chat: the
+            # payment must remain inside the linked business conversation.
+            database.set_paid_message_status(int(row["id"]), "failed")
+            try:
+                telegram_api.send_reply(
+                    handlers.bot, chat_id, i18n.t("gate.pay.failed"),
+                    business_connection_id=business_connection_id,
+                )
+            except Exception:
+                log.debug("could not report failed business invoice creation", exc_info=True)
+            return False
         markup = keyboards.pay_button(stars, row["payload"], url=inv_url)
         try:
             telegram_api.send_reply(handlers.bot, chat_id, prompt,
@@ -392,6 +439,7 @@ def request_payment(chat_id: int, user_id: int, text: str,
         except Exception:
             log.warning("could not send business stars invoice link to chat=%s",
                         utils.mask_id(chat_id), exc_info=True)
+            database.set_paid_message_status(int(row["id"]), "failed")
             return False
 
     markup = keyboards.pay_button(stars, row["payload"])
@@ -416,7 +464,9 @@ def request_payment(chat_id: int, user_id: int, text: str,
             log.debug("could not send invoice retry button", exc_info=True)
         return False
     try:
-        handlers.bot.send_message(chat_id, prompt, parse_mode="HTML", reply_markup=markup)
+        # This is owner-authored plain text; escape it before HTML-mode sending.
+        handlers.bot.send_message(chat_id, utils.escape(prompt), parse_mode="HTML",
+                                  reply_markup=markup)
     except Exception:
         log.debug("could not send the payment prompt", exc_info=True)
     log.info("stars invoice sent to chat=%s (%s stars)", utils.mask_id(chat_id), stars)
@@ -512,7 +562,12 @@ def on_pre_checkout(query) -> None:
     if not _payment_matches(row, query.from_user.id, query):
         return telegram_api.answer_pre_checkout_query(query.id, False,
                                                       i18n.t("gate.pay.expired"))
-    if not gate_service.subscription_ok(query.from_user.id):
+    if not database.get_bool("auto_reply_enabled"):
+        return telegram_api.answer_pre_checkout_query(query.id, False,
+                                                      i18n.t("gate.pay.expired"))
+    # Subscription checks are part of the direct-bot gate only. A Stars payment
+    # opened inside a Telegram Business chat must not be rejected by that switch.
+    if not row["business_connection_id"] and not gate_service.subscription_ok(query.from_user.id):
         return telegram_api.answer_pre_checkout_query(query.id, False,
                                                       i18n.t("gate.user.unavailable"))
     telegram_api.answer_pre_checkout_query(query.id, True)

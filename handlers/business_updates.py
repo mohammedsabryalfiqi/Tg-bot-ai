@@ -38,6 +38,7 @@ log = logging.getLogger("smartel.business")
 _CONTENT_TYPES = [
     "text", "photo", "document", "voice", "audio", "video",
     "video_note", "sticker", "location", "contact", "animation",
+    "successful_payment",
 ]
 
 def _tenant_for_connection_id(bcid: str | None) -> int | None:
@@ -166,6 +167,13 @@ def _process_business_message_scoped(message) -> None:
             log.warning("unknown business_connection_id=%s; ignoring", utils.mask_connection(bcid))
             return
 
+    # Stars payments completed from a Business invoice arrive on the business
+    # message update. Deliver them through the same scoped payment pipeline.
+    if getattr(message, "successful_payment", None) is not None:
+        from handlers import gates as gate_handler
+        gate_handler.on_successful_payment(message)
+        return
+
     customer_chat_id = message.chat.id
     sender = getattr(message, "from_user", None)
     sender_id = sender.id if sender else None
@@ -205,31 +213,45 @@ def _process_business_message_scoped(message) -> None:
         log.info("duplicate inbound message %s ignored", message_id)
         return
 
-    # Check paid messages / entry gate per account
-    from handlers import gates as gate_handler
-    from services import gate_service
-    if gate_service.payments_enabled():
-        free = gate_service.park_message(sender_id, customer_chat_id, text, free=True,
-                                         business_connection_id=bcid)
-        if free is None:
-            # Free quota used up or 0 -> require stars payment
-            if gate_service.stars_price() <= 0:
-                telegram_api.send_reply(handlers.bot, customer_chat_id,
-                                        i18n.t("gate.user.payment_unavailable"),
-                                        business_connection_id=bcid)
+    # Stars can be collected inside the linked Business chat. The invoice link
+    # is bound to this connection, so the customer never has to open the bot DM.
+    # Subscription membership checks remain specific to direct bot conversations.
+    if _any_automation_on():
+        from handlers import gates as gate_handler
+        from services import gate_service
+
+        if gate_service.payments_enabled():
+            if sender_id is None:
+                log.warning("cannot gate business message without a sender user id")
                 return
-            if not gate_handler.request_payment(customer_chat_id, sender_id, text,
-                                                business_connection_id=bcid):
-                log.warning("could not request star payment for business chat=%s",
-                            utils.mask_id(customer_chat_id))
-            return
-        else:
+            free = gate_service.park_message(
+                sender_id, customer_chat_id, text, free=True,
+                business_connection_id=bcid,
+            )
+            if free is None:
+                stars = gate_service.stars_price()
+                if stars <= 0:
+                    telegram_api.send_reply(
+                        handlers.bot, customer_chat_id,
+                        i18n.t("gate.user.payment_unavailable"),
+                        business_connection_id=bcid,
+                    )
+                    return
+                if not gate_handler.request_payment(
+                    customer_chat_id, sender_id, text, business_connection_id=bcid
+                ):
+                    log.warning("could not request Stars payment for business chat=%s",
+                                utils.mask_id(customer_chat_id))
+                return
+
             left = gate_service.free_left(sender_id)
-            if left == 0:
+            stars = gate_service.stars_price()
+            if left == 0 and stars > 0:
                 try:
-                    telegram_api.send_reply(handlers.bot, customer_chat_id,
-                                            gate_service.free_last_notice(),
-                                            business_connection_id=bcid)
+                    telegram_api.send_reply(
+                        handlers.bot, customer_chat_id, gate_service.free_last_notice(stars),
+                        business_connection_id=bcid,
+                    )
                 except Exception:
                     log.debug("could not send last free notice to business chat", exc_info=True)
 
@@ -324,8 +346,8 @@ def _generate_reply(conn, customer_chat_id: int, customer_text: str) -> str | No
 
 
 def _any_automation_on() -> bool:
-    """True when either auto-send or draft (approval) mode is enabled."""
-    return database.get_bool("auto_reply_enabled") or database.get_bool("approval_mode_enabled")
+    """The auto-reply switch is the master; approval only selects draft mode."""
+    return database.get_bool("auto_reply_enabled")
 
 
 def _is_first_inbound(bcid: str, customer_chat_id: int) -> bool:

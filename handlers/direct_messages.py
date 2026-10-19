@@ -136,6 +136,11 @@ def _process_scoped(message) -> None:
         if caption and database.get_bool("process_nontext_enabled"):
             text = caption
     if not text:
+        # In OFF mode, do not emit even a subscription/payment prompt or media
+        # acknowledgement to the customer.
+        if not _any_automation_on():
+            _handle_non_text(conn, message)
+            return
         # Media must not bypass entry gates (a paid media-only message is not
         # supported by the text invoice pipeline).
         if gate_service.subscription_enabled():
@@ -157,6 +162,14 @@ def _process_scoped(message) -> None:
         log.info("duplicate direct message %s ignored", message_id)
         return
 
+    # OFF mode is a hard stop: retain the inbound/monitoring record, but do not
+    # run entry gates (which would still send a customer-facing prompt).
+    if not _any_automation_on():
+        database.insert_message(bcid, chat_id, message_id, "in", "user", text)
+        if database.get_bool("monitoring_mode"):
+            _notify_incoming(bcid, chat_id, text)
+        return
+
     # Entry gates run *before* the message is stored or answered: until the
     # person has joined the channels (or paid), the message never reaches the
     # account owner. Business chats never come through here.
@@ -166,11 +179,6 @@ def _process_scoped(message) -> None:
     gated = was_gated or None
 
     database.insert_message(bcid, chat_id, message_id, "in", "user", text)
-
-    if not _any_automation_on():
-        if database.get_bool("monitoring_mode"):
-            _notify_incoming(bcid, chat_id, text)
-        return
 
     if business_service.is_chat_paused(bcid, chat_id):
         log.debug("direct chat paused; skipping auto-reply")
@@ -186,8 +194,9 @@ def _process_scoped(message) -> None:
         return
 
     if database.get_bool("greet_new_customers") and _is_first_inbound(bcid, chat_id):
+        # Greet, then keep going: the message that opened the chat still
+        # deserves an answer (same behaviour as the business pipeline).
         _send_welcome(conn, chat_id)
-        return
 
     batch = batching.batcher.process((bcid, chat_id), message_id, text)
     if batch is None:                           # covered by an in-flight batch
@@ -430,6 +439,11 @@ def _process_paid_scoped(row: dict) -> bool:
     conn = business_service.get_connection(bcid)
     if conn is None or not conn["is_enabled"]:
         return False
+    if not _any_automation_on():
+        handlers.notify_owner(i18n.t(
+            "gate.pay.off", chat_id=chat_id, text=utils.escape(text[:800])
+        ))
+        return False
     if not ai_service.is_ready():
         handlers.notify_owner(i18n.t("gate.pay.failed"))
         return False
@@ -521,7 +535,8 @@ def _send_welcome(conn, chat_id: int) -> None:
 
 
 def _any_automation_on() -> bool:
-    return database.get_bool("auto_reply_enabled") or database.get_bool("approval_mode_enabled")
+    """The auto-reply switch is the master; approval only selects draft mode."""
+    return database.get_bool("auto_reply_enabled")
 
 
 def _is_first_inbound(bcid: str, chat_id: int) -> bool:
