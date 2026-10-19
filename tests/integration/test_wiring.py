@@ -183,6 +183,27 @@ def _business_message(text: str, message_id: int = 50, chat_id: int = 5,
     })
 
 
+def _business_successful_payment(payload: str, message_id: int = 80,
+                                 chat_id: int = 5, user_id: int = 10,
+                                 bcid: str = "bc1", update_id: int = 800):
+    return _update({
+        "update_id": update_id,
+        "business_message": {
+            "message_id": message_id,
+            "date": 0,
+            "chat": {"id": chat_id, "type": "private"},
+            "from": {"id": user_id, "is_bot": False, "first_name": "Customer"},
+            "business_connection_id": bcid,
+            "successful_payment": {
+                "currency": "XTR", "total_amount": 25,
+                "invoice_payload": payload,
+                "telegram_payment_charge_id": "business-charge-1",
+                "provider_payment_charge_id": "",
+            },
+        },
+    })
+
+
 # --- claim flow --------------------------------------------------------------
 def test_claim_flow_then_owner_commands(wired):
     wired.bot.process_new_updates([_dm(f"/start {CLAIM_CODE}")])
@@ -263,6 +284,42 @@ def test_direct_message_is_answered_end_to_end(wired_owned, monkeypatch):
     assert wired_owned.db.count_messages(direction="out", role="assistant") == 1
     # The chat is stored under the reserved direct connection, hidden from stats.
     assert wired_owned.db.get_business_connection(telegram_api.DIRECT_CONNECTION_ID)
+
+
+def test_direct_first_message_is_greeted_and_answered(wired_owned, monkeypatch):
+    wired_owned.db.set_setting("ai_provider", "pollinations")
+    wired_owned.db.set_setting("auto_reply_enabled", True)
+    wired_owned.db.set_setting("approval_mode_enabled", False)
+    wired_owned.db.set_setting("reply_debounce_seconds", 0.0)
+    wired_owned.db.set_setting("greet_new_customers", True)
+    wired_owned.db.set_setting("welcome_text", "Welcome to Cairo Bakery!")
+    monkeypatch.setattr("services.ai_service.chat", lambda messages: "أهلاً بيك 👋")
+
+    wired_owned.bot.process_new_updates([_direct_message("السلام عليكم")])
+
+    customer_texts = wired_owned.rec.texts(4242)
+    assert "Welcome to Cairo Bakery!" in customer_texts
+    assert "أهلاً بيك 👋" in customer_texts
+
+
+def test_off_mode_does_not_reply_or_send_a_payment_prompt(wired_owned, monkeypatch):
+    wired_owned.db.set_setting("ai_provider", "pollinations")
+    wired_owned.db.set_setting("auto_reply_enabled", False)
+    wired_owned.db.set_setting("approval_mode_enabled", True)  # stale/default flag
+    wired_owned.db.set_setting("paid_messages_enabled", True)
+    wired_owned.db.set_setting("paid_message_stars", 25)
+    invoices = []
+    monkeypatch.setattr("telegram_api.send_star_invoice",
+                        lambda *args, **kwargs: invoices.append(kwargs))
+    monkeypatch.setattr("services.ai_service.chat",
+                        lambda messages: pytest.fail("off mode must not call the model"))
+
+    wired_owned.bot.process_new_updates([_direct_message("السلام عليكم")])
+
+    assert wired_owned.rec.texts(4242) == []
+    assert invoices == []
+    assert wired_owned.db.count_pending_approvals() == 0
+    assert wired_owned.db.count_messages(direction="in") == 1
 
 
 def test_direct_message_never_carries_a_business_connection_id(wired_owned, monkeypatch):
@@ -608,8 +665,8 @@ def test_subscription_gate_holds_the_message_until_the_person_joins(wired_owned,
     assert "تمام 👌" in wired_owned.rec.texts(4242)
 
 
-def test_business_chats_are_never_gated(wired_owned, monkeypatch):
-    """A Telegram Business customer chat keeps working exactly as before."""
+def test_business_stars_gate_keeps_invoice_inside_the_account_chat(wired_owned, monkeypatch):
+    """Stars are paid in the linked Business conversation, not the bot DM."""
     wired_owned.db.add_required_channel("@required")
     wired_owned.db.set_setting("require_subscription_enabled", True)
     wired_owned.db.set_setting("paid_messages_enabled", True)
@@ -617,14 +674,69 @@ def test_business_chats_are_never_gated(wired_owned, monkeypatch):
     wired_owned.db.upsert_business_connection("bc1", 999, True, True)
     wired_owned.db.set_setting("auto_reply_enabled", True)
     wired_owned.db.set_setting("approval_mode_enabled", False)
-    wired_owned.db.set_setting("reply_debounce_seconds", 0.0)
     monkeypatch.setattr("services.gate_service.telegram_api.get_chat_member",
-                        lambda ref, user: {"status": "left"})
-    monkeypatch.setattr("services.ai_service.chat", lambda messages: "أهلاً 👋")
+                        lambda *args: pytest.fail("Business Stars must not use the DM subscription gate"))
+    monkeypatch.setattr("services.ai_service.chat",
+                        lambda messages: pytest.fail("unpaid Business messages must not reach AI"))
+    links = []
+    monkeypatch.setattr("telegram_api.create_star_invoice_link",
+                        lambda **kwargs: links.append(kwargs) or "https://t.me/$business-invoice")
+    monkeypatch.setattr("telegram_api.send_star_invoice",
+                        lambda *args, **kwargs: pytest.fail("must not invoice in the bot DM"))
 
     wired_owned.bot.process_new_updates([_business_message("السلام عليكم")])
 
-    assert "أهلاً 👋" in wired_owned.rec.texts(5)
+    assert links and links[0]["business_connection_id"] == "bc1"
+    assert links[0]["stars"] == 50
+    assert wired_owned.db.count_paid_messages(status="pending") == 1
+    assert wired_owned.db.count_messages(direction="in") == 0
+    business_kwargs = _customer_kwargs(wired_owned.rec, 5)
+    assert business_kwargs and business_kwargs[-1]["business_connection_id"] == "bc1"
+    urls = [button.url for row in business_kwargs[-1]["reply_markup"].keyboard
+            for button in row if getattr(button, "url", None)]
+    assert urls == ["https://t.me/$business-invoice"]
+    assert wired_owned.rec.texts(10) == []  # the customer was not redirected to bot DM
+
+
+def test_business_invoice_link_failure_never_falls_back_to_bot_dm(wired_owned, monkeypatch):
+    wired_owned.db.set_setting("paid_messages_enabled", True)
+    wired_owned.db.set_setting("paid_message_stars", 50)
+    wired_owned.db.upsert_business_connection("bc1", 999, True, True)
+    wired_owned.db.set_setting("auto_reply_enabled", True)
+    wired_owned.db.set_setting("approval_mode_enabled", False)
+    monkeypatch.setattr("services.ai_service.chat",
+                        lambda messages: pytest.fail("unpaid Business messages must not reach AI"))
+    monkeypatch.setattr("telegram_api.create_star_invoice_link", lambda **kwargs: None)
+    monkeypatch.setattr("telegram_api.send_star_invoice",
+                        lambda *args, **kwargs: pytest.fail("must never fall back to a bot-DM invoice"))
+
+    wired_owned.bot.process_new_updates([_business_message("سؤالي")])
+
+    assert wired_owned.db.count_paid_messages(status="failed") == 1
+    assert wired_owned.db.count_paid_messages(status="pending") == 0
+    assert wired_owned.rec.texts(10) == []
+    assert any("payment was not completed" in text.lower()
+               for text in wired_owned.rec.texts(5))
+
+
+def test_business_successful_payment_is_replied_to_in_the_business_chat(
+    wired_owned, monkeypatch
+):
+    from services import gate_service
+
+    wired_owned.db.upsert_business_connection("bc1", 999, True, True)
+    _rules_env(wired_owned, monkeypatch, reply="وصلني الدفع، شكرًا! 👋")
+    row = gate_service.park_message(
+        10, 5, "سؤالي المدفوع", stars=25, business_connection_id="bc1"
+    )
+
+    wired_owned.bot.process_new_updates([_business_successful_payment(row["payload"])])
+
+    paid = wired_owned.db.get_paid_message(row["id"])
+    assert paid["status"] == "paid" and paid["delivered"] == 1
+    assert "وصلني الدفع، شكرًا! 👋" in wired_owned.rec.texts(5)
+    sent = _customer_kwargs(wired_owned.rec, 5)
+    assert sent and all(kw.get("business_connection_id") == "bc1" for kw in sent)
 
 
 def test_star_gate_invoices_then_delivers_after_payment(wired_owned, monkeypatch):

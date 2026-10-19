@@ -1,9 +1,9 @@
 """Entry gates: forced subscription and Telegram Stars paid messages.
 
-Both gates are **admin switches** (``/gate``, or `/settings → 🚪 الدخول`), both
-ship **off**, and both are enforced only on the direct-message pipeline (people
-writing to the bot itself) — a real Telegram Business customer chat is never
-gated, so nothing that works today can suddenly stop answering.
+Both gates are **admin switches** (``/gate``, or `/settings → 🚪 الدخول`) and ship
+**off**. Subscription checks apply to direct bot messages. The Stars gate also
+supports linked Telegram Business chats, where invoice links are bound to the
+business connection so the customer pays inside that conversation.
 
 Subscription gate
 -----------------

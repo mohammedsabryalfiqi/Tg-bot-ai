@@ -58,7 +58,8 @@ def test_validate_bot_falls_back_to_a_generic_message(monkeypatch, caplog):
 def test_allowed_updates_covers_the_business_types():
     # Omitting these is the classic "the bot never sees customer messages" bug.
     for needed in ("business_connection", "business_message", "edited_business_message",
-                   "deleted_business_messages", "message", "callback_query"):
+                   "deleted_business_messages", "message", "callback_query",
+                   "pre_checkout_query"):
         assert needed in main.ALLOWED_UPDATES
 
 

@@ -549,6 +549,7 @@ STRINGS: dict[str, str] = {
     # handlers/settings.py
     # =========================================================================
     "set.group.reply": "🤖 الردود والسلوك",
+    "set.group.messages": "💬 رسائل الترحيب والدفع",
     "set.group.persona": "🧑‍💼 الشخصية واللغة",
     "set.group.lang": "🌐 لغة البوت",
     "set.group.ai": "🧠 موديل الذكاء",
@@ -579,6 +580,7 @@ STRINGS: dict[str, str] = {
     "set.prompt_range": " (المسموح {min}–{max})",
     "set.empty": "مفيش قيمة — ما اتغيّرش حاجة.",
     "set.text_saved": "✅ تم تحديث {label}:\n<b>{value}</b>",
+    "set.text_reset": "✅ رجّعنا {label} للنص الافتراضي.",
     "set.not_number": "«{raw}» مش رقم صحيح. {label} زي ما هو.",
     "set.out_of_range": "القيمة لازم تكون بين {low} و {high}. {label} زي ما هو.",
     "set.number_saved": "✅ تم ضبط {label} على <b>{value}</b>.",
@@ -598,6 +600,10 @@ STRINGS: dict[str, str] = {
     ),
     "set.opt.greet_new_customers": "ترحيب بالعملاء الجدد",
     "set.opt.welcome_text": "نص رسالة الترحيب",
+    "set.opt.welcome_text.hint": (
+        "تتبعث للعميل الجديد عند تفعيل «ترحيب بالعملاء الجدد». "
+        "ابعت clear لاستعادة رسالة الترحيب الافتراضية."
+    ),
     "set.opt.owner_takeover_pause_minutes": "مدة الإيقاف بعد تدخلك (دقيقة)",
     "set.opt.max_messages_per_customer_per_hour": "حد الرسائل في الساعة",
     "set.opt.direct_reply_enabled": "الرسائل الخاصة (شات البوت)",
@@ -1272,6 +1278,10 @@ STRINGS: dict[str, str] = {
     "gate.pay.expired": "الفاتورة دي انتهت — ابعت رسالتك تاني.",
     "gate.pay.done": "✅ الدفع تم! بقرا رسالتك دلوقتي…",
     "gate.pay.failed": "⚠️ الدفع مكملش. جرّب تاني.",
+    "gate.pay.off": (
+        "⚠️ وصلت رسالة مدفوعة من المحادثة <code>{chat_id}</code> أثناء إيقاف الردود. "
+        "لم يُرسل رد تلقائي. الرسالة: «{text}»"
+    ),
     "gate.owner.copy": (
         "⭐ <b>رسالة مدفوعة ({stars} نجمة)</b>\n"
         "من: <b>{name}</b> (المحادثة <code>{chat_id}</code>)\n\n"
@@ -1308,7 +1318,12 @@ STRINGS: dict[str, str] = {
     "set.opt.paid_messages_enabled": "تحصيل نجوم مقابل الرسائل",
     "set.opt.paid_messages_enabled.hint": (
         "كل رسالة بتكلف السعر اللي تحت. أوقف الرسائل المدفوعة لو عايز تلغي شرط الدفع. "
-        "بيتطبّق على الرسائل الخاصة بس."
+        "يشتغل في شات البوت الخاص ومحادثات Telegram Business المرتبطة."
+    ),
+    "set.opt.payment_message": "رسالة الدفع قبل الفاتورة",
+    "set.opt.payment_message.hint": (
+        "تظهر للعميل قبل الفاتورة. استخدم {stars} لعرض السعر تلقائيًا، "
+        "وابعت clear لاستعادة النص الافتراضي."
     ),
     "set.opt.paid_message_stars": "سعر الرسالة (نجوم)",
     "set.opt.paid_message_stars.hint": (

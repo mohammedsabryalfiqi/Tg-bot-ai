@@ -21,9 +21,11 @@ toggle subscription, set a Stars price and set the free-message allowance to
 The bot must be a channel admin to verify membership. Enabled gates **fail closed**:
 unverifiable membership, missing setup and failed invoices do not authorize replies.
 Visitors see joining/pricing on `/start`, then an invoice for their text. Delivery
-requires Telegram's matching payment confirmation. Gates apply to messages sent
-to **the bot itself**, not linked-account conversations. Toggle colors follow
-saved state (green enabled, red disabled) on supported Telegram clients.
+requires Telegram's matching payment confirmation. Subscription checks apply to
+messages sent to **the bot itself**; Stars payments also work in linked-account
+conversations, with an invoice link sent **inside the customer's business chat**
+(not redirected to the bot DM). Toggle colors follow saved state (green enabled,
+red disabled) on supported Telegram clients.
 
 It uses **only the official Telegram Bot API business features** — no Telethon /
 Pyrogram userbot, no phone number / login code / 2FA / session string, no scraping.
@@ -87,12 +89,12 @@ The bot token comes from **@BotFather**.
   Telegram group/channel or a block of text. Web pages are fetched into the
   knowledge base, and the reference list is handed to the assistant so it shares
   **real** links instead of inventing them.
-- 🚪 **Entry gates** (`/gate`), both **off by default** and both limited to private
-  messages (a Telegram Business chat is never gated):
-  **forced subscription** to your channels/groups (join buttons + a ✅ re-check,
-  cached 5 minutes) and **paid messages with Telegram Stars** — you type the price,
-  the first *N* messages can be free, and a message is only delivered after
-  Telegram confirms the payment. Gated chats also get a copy sent to you (switchable).
+- 🚪 **Entry gates** (`/gate`), **off by default**: **forced subscription** to your
+  channels/groups on direct bot messages (join buttons + a ✅ re-check, cached 5
+  minutes) and **paid messages with Telegram Stars** on direct bot messages or
+  linked-account chats. In Telegram Business the invoice link is sent inside the
+  customer's existing conversation; messages are delivered only after Telegram
+  confirms payment. Gated chats also get a copy sent to you (switchable).
 
 ### Normal bot vs. Business managed bot
 
@@ -284,7 +286,8 @@ once.
 | `reply_debounce_seconds` | `1.0` | Batch rapid-fire messages into one reply (0–8) |
 | `process_nontext_enabled` | `false` | Treat media captions as messages |
 | `nontext_ack_message` | *(empty)* | Auto-reply to a photo/voice with no text |
-| `greet_new_customers` / `welcome_text` | `false` / *(empty)* | Welcome a first-time customer |
+| `greet_new_customers` / `welcome_text` | `false` / *(empty)* | Welcome a first-time customer; edit the text in `/settings` → Welcome & payment messages |
+| `payment_message` | *(empty)* | Custom text shown before a Stars invoice; `{stars}` inserts the price. Edit in `/settings` → Welcome & payment messages |
 | `owner_takeover_pause_minutes` | `30` | Cool-down after you reply yourself |
 | `max_messages_per_customer_per_hour` | `20` | Rate limit per customer |
 | `assistant_name` / `business_name` / `business_description` | *(empty)* | Persona and business context |
@@ -309,8 +312,9 @@ once.
 | `paid_message_free_count` | `0` | How many messages a person gets before paying |
 | `gate_copy_to_owner` | `true` | Send you a copy of a message that went through a gate |
 
-**Safe by default:** with `auto_reply_enabled=false` + `approval_mode_enabled=true`
-nothing reaches a customer until you act.
+**Safe by default:** `auto_reply_enabled` is the master switch. The OFF button stops
+reply generation (including new approval drafts); approval mode only chooses drafts
+when the master switch is on. The default settings never send an automatic customer reply.
 
 ---
 
@@ -338,11 +342,12 @@ you never send a reply to a message that no longer exists.
 
 ---
 
-## Entry gates & learning (private messages)
+## Entry gates & learning
 
-Everything in this section applies to **private messages sent to the bot itself**
-(the `/direct` pipeline). Telegram Business customer chats are never gated, so a
-working setup cannot be shut out by switching a gate on.
+Subscription checks and join buttons apply to **private messages sent to the bot
+itself** (`/direct`). The Stars gate also supports linked Telegram Business
+conversations: it sends an invoice link in the customer's existing account chat,
+so payment never requires switching to the bot's private chat.
 
 ### Topic rules — `/rules`
 Send your instructions as one free-form message (`/rules_add`, or the ✍️ button):

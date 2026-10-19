@@ -569,6 +569,7 @@ STRINGS: dict[str, str] = {
     # handlers/settings.py
     # =========================================================================
     "set.group.reply": "🤖 Replies & behaviour",
+    "set.group.messages": "💬 Welcome & payment messages",
     "set.group.persona": "🧑‍💼 Persona & language",
     "set.group.lang": "🌐 Bot language",
     "set.group.ai": "🧠 AI model",
@@ -599,6 +600,7 @@ STRINGS: dict[str, str] = {
     "set.prompt_range": " (allowed {min}–{max})",
     "set.empty": "Empty value — nothing changed.",
     "set.text_saved": "✅ {label} updated:\n<b>{value}</b>",
+    "set.text_reset": "✅ Restored the default {label}.",
     "set.not_number": "'{raw}' is not a valid number. {label} unchanged.",
     "set.out_of_range": "Value must be between {low} and {high}. {label} unchanged.",
     "set.number_saved": "✅ {label} set to <b>{value}</b>.",
@@ -618,6 +620,10 @@ STRINGS: dict[str, str] = {
     ),
     "set.opt.greet_new_customers": "Welcome new customers",
     "set.opt.welcome_text": "Welcome message",
+    "set.opt.welcome_text.hint": (
+        "Sent to a first-time customer when welcome-new-customers is on. "
+        "Send clear to restore the default welcome."
+    ),
     "set.opt.owner_takeover_pause_minutes": "Takeover pause (min)",
     "set.opt.max_messages_per_customer_per_hour": "Rate limit / hour",
     "set.opt.direct_reply_enabled": "Direct messages (bot chat)",
@@ -1407,6 +1413,10 @@ STRINGS: dict[str, str] = {
     "gate.pay.expired": "That invoice has expired — please send your message again.",
     "gate.pay.done": "✅ Payment received! Reading your message now…",
     "gate.pay.failed": "⚠️ The payment was not completed. Please try again.",
+    "gate.pay.off": (
+        "⚠️ A paid message arrived from chat <code>{chat_id}</code> while replies are OFF. "
+        "No automatic reply was sent. Message: “{text}”"
+    ),
     "gate.owner.copy": (
         "⭐ <b>Paid message ({stars} stars)</b>\n"
         "From: <b>{name}</b> (chat <code>{chat_id}</code>)\n\n"
@@ -1444,7 +1454,12 @@ STRINGS: dict[str, str] = {
     "set.opt.paid_messages_enabled": "Charge stars for messages",
     "set.opt.paid_messages_enabled.hint": (
         "Each message costs the price below. Switch paid messages off to keep the gate "
-        "open. Applies to private messages only."
+        "open. Works in direct bot chats and linked Telegram Business conversations."
+    ),
+    "set.opt.payment_message": "Payment message (before invoice)",
+    "set.opt.payment_message.hint": (
+        "Shown before the invoice. Use {stars} to insert the price automatically; "
+        "send clear to restore the default text."
     ),
     "set.opt.paid_message_stars": "Price per message (stars)",
     "set.opt.paid_message_stars.hint": (

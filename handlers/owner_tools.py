@@ -87,9 +87,12 @@ def set_mode(mode: str) -> str:
         database.set_setting("auto_reply_enabled", True)
         database.set_setting("approval_mode_enabled", True)
     else:
+        # OFF is a real master switch: disable both auto-send and draft
+        # generation. Keeping approval_mode_enabled=True here would leave the
+        # pipeline active and continue creating approval cards.
         mode = "off"
         database.set_setting("auto_reply_enabled", False)
-        database.set_setting("approval_mode_enabled", True)
+        database.set_setting("approval_mode_enabled", False)
     return mode
 
 

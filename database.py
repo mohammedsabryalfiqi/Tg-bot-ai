@@ -107,6 +107,7 @@ SETTINGS_SCHEMA: dict[str, tuple[type, object]] = {
     "typing_indicator": (bool, True),        # keep "typing…" alive while generating
     "greet_new_customers": (bool, False),    # send welcome_text on a customer's first message
     "welcome_text": (str, ""),
+    "payment_message": (str, ""),          # custom text shown above the Stars invoice
     # Optional canned acknowledgement for non-text messages (photo, voice, …).
     # Empty (default) = only notify the owner, never answer automatically.
     "nontext_ack_message": (str, ""),
